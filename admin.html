@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan Your Color · Pilot admin</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="admin-bar">
+  <div class="brand">Scan Your Color · Pilot admin</div>
+  <nav class="tabs" id="tabs" hidden>
+    <button class="btn" data-tab="data">Pilot data</button>
+    <button class="btn" data-tab="survey">Survey builder</button>
+    <button class="btn" data-tab="stores">Stores</button>
+    <button class="btn" id="sign-out">Sign out</button>
+  </nav>
+</header>
+
+<main class="wrap" id="signin" hidden>
+  <div class="card stack" style="max-width:420px">
+    <h1>Admin sign in</h1>
+    <div class="field"><label class="label" for="email">Email</label><input id="email" type="email" autocomplete="username"></div>
+    <div class="field"><label class="label" for="password">Password</label><input id="password" type="password" autocomplete="current-password"></div>
+    <button class="btn primary" id="do-signin">Sign in</button>
+    <button class="btn" id="do-signup">Create my admin account</button>
+    <p class="small muted">First time: choose a password (8 or more characters), press Create my admin account, then confirm the email you receive and sign in. Only approved admin emails can see pilot data.</p>
+    <div class="note" id="auth-msg" hidden></div>
+  </div>
+</main>
+
+<main class="wrap" id="view" hidden></main>
+<div class="toast note err" id="toast" role="alert" hidden></div>
+<script type="module" src="js/admin.js"></script>
+</body>
+</html>
