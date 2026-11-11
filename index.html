@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Scan Your Color</title>
+<title>My Banana</title>
 <meta name="theme-color" content="#1b2a4e">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -17,7 +17,7 @@
 
   <!-- 1 Welcome -->
   <section data-screen="welcome" hidden>
-    <header class="bar"><div class="brand">Scan Your Color</div><span class="chip navy">Pilot</span></header>
+    <header class="bar"><div class="brand">My Banana</div><span class="chip navy">Pilot</span></header>
     <div class="body">
       <h1>Check your banana color in seconds</h1>
       <p>Point your phone camera at the bananas. We show which of four color stages they are today.</p>
@@ -37,7 +37,7 @@
 
   <!-- 2 Register -->
   <section data-screen="register" hidden>
-    <header class="bar"><button class="back" data-go="welcome">Back</button><div class="brand">Scan Your Color</div><span class="step">Step 1 of 5</span></header>
+    <header class="bar"><button class="back" data-go="welcome">Back</button><div class="brand">My Banana</div><span class="step">Step 1 of 5</span></header>
     <div class="body">
       <h1>Register your scans</h1>
       <p>Registering is optional. It tells us who is using the scan during the pilot.</p>
@@ -54,7 +54,7 @@
 
   <!-- 3 Store -->
   <section data-screen="store" hidden>
-    <header class="bar"><button class="back" data-go="register">Back</button><div class="brand">Scan Your Color</div><span class="step">Step 2 of 5</span></header>
+    <header class="bar"><button class="back" data-go="register">Back</button><div class="brand">My Banana</div><span class="step">Step 2 of 5</span></header>
     <div class="body">
       <h1>Which store are you at?</h1>
       <div class="field" id="store-search-wrap"><label class="label" for="store-search">Find your store</label><input id="store-search" type="search" placeholder="Store name, city or ZIP"></div>
@@ -67,7 +67,7 @@
 
   <!-- 4 Scan -->
   <section data-screen="scan" hidden>
-    <header class="bar"><button class="back" data-go="store">Back</button><div class="brand">Scan Your Color</div><span class="step">Step 3 of 5</span></header>
+    <header class="bar"><button class="back" data-go="store">Back</button><div class="brand">My Banana</div><span class="step">Step 3 of 5</span></header>
     <div class="body">
       <div class="note warn" id="cam-warning" hidden>
         <p><strong>Warning: this phone's camera may not scan well.</strong></p>
@@ -90,7 +90,7 @@
 
   <!-- 5 Result -->
   <section data-screen="result" hidden>
-    <header class="bar"><button class="back" data-go="scan">Back</button><div class="brand">Scan Your Color</div><span class="step">Step 4 of 5</span></header>
+    <header class="bar"><button class="back" data-go="scan">Back</button><div class="brand">My Banana</div><span class="step">Step 4 of 5</span></header>
     <div class="body">
       <div class="label">Your color today</div>
       <div class="card result"><div class="swatch" id="res-swatch"></div><div><div class="stage-num" id="res-num"></div><div id="res-name"></div><div class="small muted" id="res-desc"></div></div></div>
@@ -117,7 +117,7 @@
 
   <!-- 6 Survey -->
   <section data-screen="survey" hidden>
-    <header class="bar"><span></span><div class="brand">Scan Your Color</div><span class="step">Step 5 of 5</span></header>
+    <header class="bar"><span></span><div class="brand">My Banana</div><span class="step">Step 5 of 5</span></header>
     <div class="body">
       <h1 id="survey-title">Scan saved. A few quick questions</h1>
       <div id="survey-form" class="stack"></div>
@@ -130,7 +130,7 @@
 
   <!-- 7 Saved -->
   <section data-screen="saved" hidden>
-    <header class="bar"><div class="brand">Scan Your Color</div><span class="chip navy">Pilot</span></header>
+    <header class="bar"><div class="brand">My Banana</div><span class="chip navy">Pilot</span></header>
     <div class="body">
       <div class="note ok" id="saved-thanks" hidden>Thank you. Your scan is saved.</div>
       <h1>My scans</h1>
@@ -145,10 +145,10 @@
 
   <!-- 8 Install -->
   <section data-screen="install" hidden>
-    <header class="bar"><button class="back" data-go="welcome">Back</button><div class="brand">Scan Your Color</div><span></span></header>
+    <header class="bar"><button class="back" data-go="welcome">Back</button><div class="brand">My Banana</div><span></span></header>
     <div class="body">
       <h1>Save to your screen</h1>
-      <p>Keep Scan Your Color one tap away. It opens like an app, with nothing to download.</p>
+      <p>Keep My Banana one tap away. It opens like an app, with nothing to download.</p>
       <button class="btn brass" id="install-now" hidden>Add it now</button>
       <div class="card stack"><h2>iPhone (Safari)</h2><ol style="margin:0;padding-left:20px"><li>Tap the Share button.</li><li>Tap Add to Home Screen.</li><li>Tap Add.</li></ol></div>
       <div class="card stack"><h2>Android (Chrome)</h2><ol style="margin:0;padding-left:20px"><li>Tap the three-dot menu.</li><li>Tap Add to Home screen.</li><li>Tap Install or Add.</li></ol></div>
