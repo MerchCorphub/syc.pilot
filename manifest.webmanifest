@@ -1,6 +1,6 @@
 {
-  "name": "Scan Your Color",
-  "short_name": "Scan Your Color",
+  "name": "Mybanana.app",
+  "short_name": "Mybanana.app",
   "description": "Check your banana color in seconds.",
   "start_url": "./",
   "scope": "./",
