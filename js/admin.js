@@ -1,6 +1,7 @@
 // Scan Your Color pilot: admin pages (sign-in required)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, STAGES } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, STAGES, SCAN } from './config.js';
+import { readSource } from './reader.js';
 
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = (id) => document.getElementById(id);
@@ -57,7 +58,7 @@ document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click
 function openTab(tab) {
   document.querySelectorAll('[data-tab]').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   view.textContent = '';
-  ({ data: dataTab, survey: surveyTab, stores: storesTab })[tab]();
+  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab })[tab]();
 }
 
 // ---------- pilot data ----------
@@ -334,6 +335,85 @@ async function publishSurvey() {
   if (removed.length) { const d = await db.from('survey_questions').delete().in('id', removed); if (d.error) return toast('Could not delete a question: ' + d.error.message); }
   toast('Survey published.', true);
   view.textContent = ''; surveyTab();
+}
+
+// ---------- reference pictures (what the reader learns from) ----------
+async function libraryTab() {
+  view.append(el('p', { className: 'muted', textContent: 'Loading reference pictures…' }));
+  const [own, all] = await Promise.all([
+    db.from('reference_samples').select('id,stage,hue,spot,photo_path,created_at').order('created_at', { ascending: false }).limit(2000),
+    db.rpc('get_reference_library'),
+  ]);
+  view.textContent = '';
+  if (own.error) { view.append(el('div', { className: 'note err', textContent: 'Could not load the reference pictures.' })); return; }
+  const samples = (all.data && all.data.samples) || [];
+  const count = (n, src) => samples.filter((x) => Number(x.stage) === n && (src === 'staff' ? x.src === 'staff' : x.src !== 'staff')).length;
+  const ready = STAGES.every((s) => count(s.num, 'staff') + count(s.num, 'shopper') >= SCAN.knnMin);
+  view.append(el('div', { className: 'head' }, [
+    el('div', { className: 'stack', style: 'flex:1 1 420px' }, [el('h1', { textContent: 'Reference pictures' }),
+      el('p', { className: 'muted', textContent: 'Staff pictures teach the reader what each stage looks like. Shopper scans the shopper agreed with are added automatically, at a lower weight. Once every stage has ' + SCAN.knnMin + ' or more pictures, new scans are matched against these pictures instead of the fixed color chart.' })]),
+    el('span', { className: 'chip ' + (ready ? 'ok' : 'brass'), textContent: ready ? 'Learned matching is on' : 'Using the color chart' })]));
+
+  const cards = STAGES.map((s) => {
+    const staff = count(s.num, 'staff'), shopper = count(s.num, 'shopper'), total = staff + shopper;
+    const input = el('input', { type: 'file', accept: 'image/*', multiple: true, id: 'ref-' + s.num, style: 'min-height:44px' });
+    input.addEventListener('change', () => addSamples(s, input));
+    return el('div', { className: 'card stack' }, [
+      el('div', { className: 'result' }, [el('div', { className: 'swatch', style: 'width:48px;height:48px;background:' + s.fill }), el('div', {}, [el('h2', { textContent: 'Stage ' + s.num + ': ' + s.name }), el('div', { className: 'small muted', textContent: s.desc })])]),
+      el('div', { className: 'fig', textContent: String(total) }),
+      el('div', { className: 'small muted', textContent: staff + ' staff · ' + shopper + ' shopper-agreed' + (total < SCAN.knnMin ? ' · needs ' + (SCAN.knnMin - total) + ' more' : '') }),
+      el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'ref-' + s.num, textContent: 'Add staff pictures of this stage' }), input])]);
+  });
+  view.append(el('div', { className: 'cols' }, cards));
+  view.append(el('p', { className: 'small muted', id: 'ref-msg', textContent: 'Tip: on a phone, the picture button opens the camera. Fill the frame with the bananas, in the store\'s normal light.' }));
+
+  const table = el('table', {}, [el('thead', {}, [el('tr', {}, ['Stage', 'Added', 'Hue', 'Spots', 'Photo', ''].map((t) => el('th', { textContent: t })))])]);
+  const body = el('tbody'); table.append(body);
+  (own.data || []).forEach((r) => {
+    const v = el('button', { className: 'btn link', style: 'min-height:24px;padding:0', textContent: r.photo_path ? 'View' : 'None', disabled: !r.photo_path });
+    v.addEventListener('click', () => openPhoto(r.photo_path));
+    const d = el('button', { className: 'btn danger small', textContent: 'Delete' });
+    d.addEventListener('click', async () => {
+      if (!window.confirm('Delete this reference picture? The reader stops learning from it.')) return;
+      if (r.photo_path) await db.storage.from(PHOTO_BUCKET).remove([r.photo_path]);
+      const { error } = await db.from('reference_samples').delete().eq('id', r.id);
+      if (error) return toast('Could not delete the picture.');
+      view.textContent = ''; libraryTab();
+    });
+    body.append(el('tr', {}, [el('td', { textContent: stageName(r.stage) }), el('td', { textContent: fmt(r.created_at) }), el('td', { textContent: Number(r.hue).toFixed(1) }), el('td', { textContent: Number(r.spot).toFixed(1) }), el('td', {}, [v]), el('td', {}, [d])]));
+  });
+  if (!(own.data || []).length) body.append(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'No staff pictures yet.' })]));
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Staff pictures' }), el('div', { className: 'scroll' }, [table])]));
+}
+
+async function addSamples(stage, input) {
+  const files = [...(input.files || [])];
+  if (!files.length) return;
+  const msg = document.getElementById('ref-msg');
+  let ok = 0;
+  for (let i = 0; i < files.length; i++) {
+    if (msg) msg.textContent = 'Measuring picture ' + (i + 1) + ' of ' + files.length + '…';
+    try {
+      const url = URL.createObjectURL(files[i]);
+      const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
+      const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+      const r = readSource(img, w, h, true, true);
+      if (!r || !r.ok) { URL.revokeObjectURL(url); continue; }
+      const sc = Math.min(1, SCAN.photoMaxSide / Math.max(w, h));
+      const cv = el('canvas', { width: Math.round(w * sc), height: Math.round(h * sc) });
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      const blob = await new Promise((res) => cv.toBlob((b) => res(b), 'image/jpeg', 0.8));
+      const id = crypto.randomUUID(), path = 'reference/' + id + '.jpg';
+      const up = await db.storage.from(PHOTO_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+      const { error } = await db.from('reference_samples').insert({
+        id, stage: stage.num, hue: r.hue, spot: r.spot || 0, l: r.L || 0, chroma: r.chroma || 0,
+        cct: (r.light && r.light.cct) || 0, photo_path: up.error ? null : path });
+      if (!error) ok++;
+    } catch (e) { /* skip unreadable file */ }
+  }
+  toast(ok + ' of ' + files.length + ' added to ' + stage.name + (ok < files.length ? '. The rest had no clear banana in the picture.' : '.'), ok > 0);
+  view.textContent = ''; libraryTab();
 }
 
 // ---------- stores ----------

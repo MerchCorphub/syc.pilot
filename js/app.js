@@ -1,7 +1,7 @@
 // Scan Your Color pilot: shopper app
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN } from './config.js';
-import { REFS, readSource, matchStage } from './reader.js';
+import { REFS, readSource, matchStage, knnMatch, knnReady } from './reader.js';
 
 // Shoppers are never signed in; keep this client separate from any admin session.
 const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -165,14 +165,38 @@ $('store-next').addEventListener('click', () => {
   go('scan');
 });
 
+// ---- reference library (what the reader has learned) ----
+let lib = null, libAt = 0;
+async function loadLibrary() {
+  if (lib && Date.now() - libAt < 10 * 60000) return;
+  try {
+    const { data, error } = await db.rpc('get_reference_library');
+    if (error || !data) return;
+    const samples = (data.samples || []).map((x) => ({
+      stage: (STAGES.find((s) => s.num === Number(x.stage)) || {}).key,
+      hue: +x.hue || 0, spot: +x.spot || 0, L: +x.L || 0, chroma: +x.chroma || 0, cct: +x.cct || 0, src: x.src || 'staff',
+    })).filter((x) => x.stage);
+    lib = { samples, stats: data.stats || [], staff: samples.filter((x) => x.src === 'staff').length, shopper: samples.filter((x) => x.src !== 'staff').length };
+    libAt = Date.now();
+  } catch (e) { /* keep reading from the chart */ }
+}
+const learned = () => !!lib && knnReady(lib.samples, SCAN.knnMin);
+// Learned samples win once every stage has enough of them; until then the chart numbers.
+const matchNow = (r) => (learned() ? knnMatch(r, lib.samples, SCAN.knnK) : matchStage(r, REFS, r.light, null));
+
 // ---- camera and scan ----
 const video = $('video');
-let stream = null, scanning = false, timer = null, tryAnyway = false, cameraFailLogged = false, weak = null;
+let stream = null, scanning = false, timer = null, tryAnyway = false, cameraFailLogged = false, weak = null, torchOn = false;
 
 function stopCamera() {
   scanning = false; clearTimeout(timer);
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-  video.srcObject = null;
+  video.srcObject = null; torchOn = false;
+}
+function scanHelp(text, offerPhoto) {
+  $('scan-help').textContent = text || ''; $('scan-help').hidden = !text;
+  if (offerPhoto) $('photo-instead').hidden = false;
+  $('scan-extras').hidden = $('photo-instead').hidden && $('torch').hidden;
 }
 
 async function startScanScreen() {
@@ -180,16 +204,18 @@ async function startScanScreen() {
   $('scan-now').disabled = true;
   $('scan-meter').style.width = '0';
   $('cam-msg').textContent = 'Starting camera…';
+  $('torch').hidden = true; $('photo-instead').hidden = true; scanHelp('');
   $('store-line').textContent = 'Store: ' + state.store.name;
   const info = await deviceInfo();
   $('phone-line').textContent = 'Phone detected: ' + [info.phone_model, info.os, info.browser].filter(Boolean).join(' · ');
+  loadLibrary();
   if (weak === null) {
     const { data } = await db.from('weak_camera_phones').select('phone_model');
     weak = (data || []).map((x) => (x.phone_model || '').toLowerCase());
   }
   const flagged = weak.includes((info.phone_model || '').toLowerCase());
   $('cam-warning').hidden = !flagged || tryAnyway;
-  if (flagged && !tryAnyway) { $('cam-msg').textContent = 'Camera is off until you choose Try anyway.'; return; }
+  if (flagged && !tryAnyway) { $('cam-msg').textContent = 'Camera is off until you choose Try anyway.'; scanHelp('', true); return; }
   startCamera();
 }
 $('try-anyway').addEventListener('click', () => { tryAnyway = true; $('cam-warning').hidden = true; startCamera(); });
@@ -203,25 +229,37 @@ async function startCamera() {
     await video.play();
     $('cam-msg').textContent = 'Camera ready. Tap Scan now.';
     $('scan-now').disabled = false;
+    try {
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      $('torch').hidden = !caps.torch; $('torch').textContent = 'Turn on light';
+      $('scan-extras').hidden = $('photo-instead').hidden && $('torch').hidden;
+    } catch (e) { /* no torch */ }
   } catch (err) {
     const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
-    $('cam-msg').textContent = denied
-      ? 'Camera permission is off. Allow the camera for this page, then reload.'
-      : 'This phone could not start the camera.';
+    $('cam-msg').textContent = denied ? 'Camera permission is off.' : 'This phone could not start the live camera.';
+    scanHelp(denied ? 'Allow the camera for this page and reload, or take a photo instead.' : 'You can still scan: take a photo instead.', true);
     if (!cameraFailLogged) {
       cameraFailLogged = true;
       logAttempt({ result: 'failed', failure_reason: 'camera_' + ((err && err.name) || 'error') }).catch(() => {});
     }
   }
 }
+$('torch').addEventListener('click', async () => {
+  try {
+    torchOn = !torchOn;
+    await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: torchOn }] });
+    $('torch').textContent = torchOn ? 'Turn off light' : 'Turn on light';
+  } catch (e) { $('torch').hidden = true; }
+});
 
-function grabPhoto() {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const sc = Math.min(1, SCAN.photoMaxSide / Math.max(vw, vh));
-  const cv = el('canvas', { width: Math.round(vw * sc), height: Math.round(vh * sc) });
-  cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+function toJpeg(source, w, h) {
+  const sc = Math.min(1, SCAN.photoMaxSide / Math.max(w, h));
+  const cv = el('canvas', { width: Math.max(1, Math.round(w * sc)), height: Math.max(1, Math.round(h * sc)) });
+  cv.getContext('2d').drawImage(source, 0, 0, cv.width, cv.height);
   return new Promise((res) => cv.toBlob((b) => res(b), 'image/jpeg', 0.8));
 }
+const grabPhoto = () => toJpeg(video, video.videoWidth, video.videoHeight);
 
 async function logAttempt(fields) {
   await ensureDevice();
@@ -235,14 +273,42 @@ async function logAttempt(fields) {
   return id;
 }
 
+// One whole-picture reading. More forgiving than the live box: it finds the fruit anywhere in the frame.
+function readStill(source, w, h) {
+  try {
+    const r = readSource(source, w, h, true, true);
+    if (r && r.ok) return { sm: r, m: matchNow(r), light: r.light };
+    return { light: r && r.light };
+  } catch (e) { return {}; }
+}
+
+// The leading stage across all readings so far. A 50/50 scan leans to the leader instead of failing.
+function leader(readings) {
+  const counts = {};
+  readings.forEach((x) => { counts[x.m.key] = (counts[x.m.key] || 0) + 1; });
+  const ranked = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  const top = ranked[0], share = counts[top] / readings.length;
+  const same = readings.filter((x) => x.m.key === top), last = same[same.length - 1];
+  const second = ranked[1] || (last.m.second !== top ? last.m.second : null);
+  return { share, pick: { sm: last.sm, m: Object.assign({}, last.m, {
+    conf: same.reduce((t, x) => t + x.m.conf, 0) / same.length, second, between: share < 0.7 || !!last.m.between }) } };
+}
+
+const lightTip = (light) => {
+  const k = light && light.klass;
+  if (k === 'too dark') return 'It is too dark here. Move toward more light' + ($('torch').hidden ? '' : ' or turn on the light') + ', then try again.';
+  if (k === 'glare') return 'There is too much glare. Tilt the phone a little, then try again.';
+  return 'Move closer so the bananas fill the box, then try again.';
+};
+
 $('scan-now').addEventListener('click', runScan);
 async function runScan() {
   if (scanning || !stream || !video.videoWidth) return;
   scanning = true;
-  $('scan-now').disabled = true;
+  $('scan-now').disabled = true; scanHelp('');
   const t0 = performance.now();
   const readings = [], photos = [];
-  let sm = null, hold = 0, lastPhoto = 0, locked = null, readerError = null;
+  let sm = null, hold = 0, lastPhoto = 0, pick = null, how = null, lastLight = null;
 
   await new Promise((resolve) => {
     const tick = () => {
@@ -250,20 +316,26 @@ async function runScan() {
       const now = performance.now(), gone = now - t0;
       $('scan-meter').style.width = Math.min(100, Math.round((gone / SCAN.maxMs) * 100)) + '%';
       let r = null;
-      try { r = readSource(video, video.videoWidth, video.videoHeight, true); } catch (e) { readerError = e; }
+      try { r = readSource(video, video.videoWidth, video.videoHeight, true); } catch (e) { /* skip this frame */ }
+      if (r && r.light) lastLight = r.light;
       if (r && r.ok) {
         sm = sm ? Object.assign({}, r, { hue: sm.hue * 0.45 + r.hue * 0.55, spot: sm.spot * 0.45 + r.spot * 0.55 }) : r;
-        const m = matchStage(sm, REFS, sm.light, null);
+        const m = matchNow(sm);
         readings.push({ m, sm });
         hold = m.conf >= SCAN.lockConfidence ? hold + 1 : 0;
         $('cam-msg').textContent = 'Reading color… hold steady';
-        if (photos.length < SCAN.photos && now - lastPhoto > 700) { photos.push(grabPhoto()); lastPhoto = now; }
-        if (hold >= SCAN.lockFrames) { locked = { m, sm }; return resolve(); }
+        if (photos.length < SCAN.photos && now - lastPhoto > 500) { photos.push(grabPhoto()); lastPhoto = now; }
+        if (hold >= SCAN.lockFrames) { pick = { m: Object.assign({}, m), sm }; how = 'locked'; return resolve(); }
+        if (readings.length >= SCAN.quickReadings) {
+          const lead = leader(readings);
+          if (lead.share >= SCAN.quickShare) { pick = lead.pick; how = 'quick'; return resolve(); }
+        }
       } else {
         hold = 0;
-        $('cam-msg').textContent = 'Looking for bananas… fit them inside the box';
+        const k = r && r.light && r.light.klass;
+        $('cam-msg').textContent = k === 'too dark' ? 'Too dark. Move toward more light.' : k === 'glare' ? 'Too much glare. Tilt the phone a little.' : 'Looking for bananas… fit them inside the box';
       }
-      if (gone >= SCAN.maxMs) return resolve();
+      if (gone >= SCAN.maxMs || (gone >= SCAN.giveUpMs && !readings.length)) return resolve();
       timer = setTimeout(tick, SCAN.readEveryMs);
     };
     tick();
@@ -272,53 +344,80 @@ async function runScan() {
   scanning = false;
   $('scan-meter').style.width = '100%';
 
-  // Decide the result from the whole range of readings, not one picture.
-  let pick = locked;
-  if (!pick && readings.length >= SCAN.minReadings) {
-    const counts = {};
-    readings.forEach((x) => { counts[x.m.key] = (counts[x.m.key] || 0) + 1; });
-    const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
-    const same = readings.filter((x) => x.m.key === top);
-    pick = same[same.length - 1];
-    pick = { sm: pick.sm, m: Object.assign({}, pick.m, { conf: same.reduce((t, x) => t + x.m.conf, 0) / same.length }) };
+  // Never just time out: lean to the leading stage, then try one whole-picture reading.
+  if (!pick && readings.length >= SCAN.minReadings) { pick = leader(readings).pick; how = 'leaned'; }
+  if (!pick) {
+    const still = readStill(video, video.videoWidth, video.videoHeight);
+    if (still.light) lastLight = still.light;
+    if (still.sm) { pick = { sm: still.sm, m: still.m }; how = 'still'; if (!photos.length) photos.push(grabPhoto()); }
   }
+  if (!pick) return failScan(readings.length ? 'unclear_reading' : 'no_banana_found', lastLight);
+  finishScan(pick, photos, readings, how);
+}
 
+async function failScan(reason, light) {
+  const klass = light && light.klass ? ':' + light.klass : '';
+  try { await logAttempt({ result: 'failed', failure_reason: reason + klass }); } catch (e) { /* offline */ }
+  $('cam-msg').textContent = 'We could not read a clear color.';
+  scanHelp(lightTip(light) + ' Or take a photo instead.', true);
+  $('scan-now').disabled = !stream;
+}
+
+async function finishScan(pick, photos, readings, how) {
   try {
-    if (!pick) {
-      const reason = readerError ? 'reader_error' : (readings.length ? 'unclear_reading' : 'no_banana_found');
-      await logAttempt({ result: 'failed', failure_reason: reason });
-      $('cam-msg').textContent = 'We could not read a clear color. Move closer, add light, and try again.';
-      $('scan-now').disabled = false;
-      return;
-    }
     $('cam-msg').textContent = 'Saving your scan…';
     const stage = STAGES.find((s) => s.key === pick.m.key);
-    const hues = readings.map((x) => x.sm.hue);
+    const second = STAGES.find((s) => s.key === pick.m.second && s.key !== pick.m.key) || null;
+    const hues = readings.length ? readings.map((x) => x.sm.hue) : [pick.sm.hue];
     const light = pick.sm.light || {};
+    const usedLearned = !!pick.m.knn;
     const attemptId = await logAttempt({ result: 'success' });
     const scanId = uuid();
     const { error } = await db.from('scans').insert({
       id: scanId, attempt_id: attemptId, device_id: state.deviceId, shopper_id: state.shopperId,
       store_id: state.store.id, store_name_typed: state.store.typed,
-      stage: stage.num, reader_version: READER_VERSION, ...phoneClock(),
+      stage: stage.num, reader_version: usedLearned ? READER_VERSION.learned : READER_VERSION.chart, ...phoneClock(),
       color_values: {
         hue: r1(pick.sm.hue), chroma: r1(pick.sm.chroma), L: r1(pick.sm.L), spot: r1(pick.sm.spot),
         peel_share: r1(pick.sm.peelShare), hex: pick.sm.hex || null,
-        confidence: Math.round(pick.m.conf * 100) / 100, second: pick.m.second || null, locked: !!locked,
+        confidence: Math.round(pick.m.conf * 100) / 100, second: pick.m.second || null, between: !!pick.m.between,
+        decided: how, locked: how === 'locked', method: usedLearned ? 'learned' : 'chart',
+        votes: usedLearned ? pick.m.votes : null, neighbours: usedLearned ? pick.m.k : null,
+        library_staff: lib ? lib.staff : 0, library_shopper: lib ? lib.shopper : 0,
         readings: readings.length, hue_min: r1(Math.min(...hues)), hue_max: r1(Math.max(...hues)),
         light: { cct: r1(light.cct), klass: light.klass || null, conf: r1(light.conf) },
       },
     });
     if (error) throw error;
     uploadPhotos(scanId, photos);        // runs in the background
-    current = { scanId, stage, store: state.store.name };
+    current = { scanId, stage, second, between: !!pick.m.between && !!second, store: state.store.name,
+      learned: usedLearned, votes: pick.m.votes, neighbours: pick.m.k };
     showResult();
   } catch (e) {
     $('cam-msg').textContent = 'Could not save this scan. Check your connection and try again.';
     toast('Could not save this scan. Check your connection and try again.');
-    $('scan-now').disabled = false;
+    $('scan-now').disabled = !stream;
   }
 }
+
+// Photo fallback: for phones whose live camera freezes, and for bad light.
+$('photo-instead').addEventListener('click', () => $('photo-file').click());
+$('photo-file').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  $('cam-msg').textContent = 'Reading your photo…'; scanHelp('');
+  try {
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    const still = readStill(img, w, h);
+    const photo = toJpeg(img, w, h);
+    URL.revokeObjectURL(url);
+    if (!still.sm) return failScan('photo_no_banana_found', still.light);
+    finishScan({ sm: still.sm, m: still.m }, [photo], [], 'photo');
+  } catch (err) { failScan('photo_unreadable', null); }
+});
 
 async function uploadPhotos(scanId, photos) {
   for (let i = 0; i < photos.length; i++) {
@@ -346,8 +445,18 @@ function showResult() {
     ladder.append(el('div', { className: x.num === s.num ? 'on' : '' }, [
       el('i', { style: 'background:' + x.fill }), el('span', { textContent: x.num === s.num ? 'Your scan' : 'Stage ' + x.num })]));
   });
+  // more about this color
+  $('res-between').hidden = !current.between;
+  if (current.between) $('res-between').textContent = 'Your bananas are between Stage ' + Math.min(s.num, current.second.num) + ' and Stage ' + Math.max(s.num, current.second.num) + '. They lean toward Stage ' + s.num + ': ' + s.name + '.';
+  $('res-uses').textContent = (s.uses || []).join(' · ');
+  $('res-match').textContent = current.learned
+    ? current.votes + ' of the ' + current.neighbours + ' closest reference pictures are ' + s.name + ' (from ' + (lib.staff + lib.shopper) + ' pictures in the library).'
+    : 'Matched against the color chart.';
+  const st = lib && (lib.stats || []).find((x) => Number(x.stage) === s.num);
+  $('res-agree').hidden = !(st && st.checked >= 5);
+  if (st && st.checked >= 5) $('res-agree').textContent = st.agreed + ' of ' + st.checked + ' shoppers who got ' + s.name + ' said it matched what they saw.';
   const sel = $('match-stage'); sel.textContent = '';
-  STAGES.filter((x) => x.num !== s.num).forEach((x) => sel.append(el('option', { value: x.num, textContent: 'Stage ' + x.num + ': ' + x.name })));
+  STAGES.filter((x) => x.num !== s.num).forEach((x) => sel.append(el('option', { value: x.num, textContent: 'Stage ' + x.num + ': ' + x.name, selected: !!current.second && current.second.num === x.num })));
   document.querySelectorAll('input[name=match]').forEach((i) => { i.checked = false; });
   $('match-stage-wrap').hidden = true;
   go('result');

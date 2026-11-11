@@ -295,4 +295,29 @@ function readSource(src,sw,sh,wb,still,region){
 }
 
 
-export { REFS, readSource, matchStage };
+// ---- learned matcher: k-nearest neighbours over saved samples (from the SYC working model) ----
+// Every sample is a handful of numbers measured by the same pipeline as a live scan.
+// A new reading votes against its closest samples; light temperature is part of the distance.
+const KEYS=['green','firm','ripe','spotty'];
+function featDist(a,b){
+  const dh=a.hue-b.hue, ds=((a.spot||0)-(b.spot||0))*0.22, dl=((a.L||0)-(b.L||0))*0.25, dc=((a.chroma||0)-(b.chroma||0))*0.2;
+  const dk=(a.cct&&b.cct)?(a.cct-b.cct)/600:0;
+  return Math.sqrt(dh*dh+ds*ds+dl*dl+dc*dc+dk*dk);
+}
+function knnMatch(reading,samples,k){
+  const q={hue:reading.hue,spot:reading.spot,L:reading.L,chroma:reading.chroma,cct:reading.light&&reading.light.cct};
+  const ds=samples.map(s=>({s,d:featDist(q,s)})).sort((a,b)=>a.d-b.d).slice(0,k);
+  const w={};ds.forEach(x=>{w[x.s.stage]=(w[x.s.stage]||0)+(x.s.src==='auto'?0.6:1)/(x.d+0.6);});
+  const ranked=Object.keys(w).sort((a,b)=>w[b]-w[a]);
+  const tot=ranked.reduce((t,kk)=>t+w[kk],0)||1;
+  const share=w[ranked[0]]/tot;
+  const near=ds.filter(x=>x.s.stage===ranked[0]).reduce((m,x)=>Math.min(m,x.d),Infinity);
+  const close=Math.max(0,Math.min(1,1-(near-2)/10));
+  const framing=Math.min(1,(reading.peelShare==null?1:reading.peelShare)/0.38);
+  const lc=reading.light&&reading.light.ok?reading.light.conf:0.5;
+  return {key:ranked[0],second:ranked[1]||ranked[0],conf:Math.max(0,Math.min(1,share*close*framing*(0.82+0.18*lc))),
+    between:share<0.6,knn:true,k:ds.length,votes:ds.filter(x=>x.s.stage===ranked[0]).length,d1:near,inBand:false,band:0};
+}
+function knnReady(samples,min){return KEYS.every(k=>samples.filter(s=>s.stage===k).length>=min);}
+
+export { REFS, KEYS, readSource, matchStage, knnMatch, knnReady };
