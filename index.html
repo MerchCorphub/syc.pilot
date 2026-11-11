@@ -79,6 +79,12 @@
         <div class="msg" id="cam-msg">Starting camera…</div>
       </div>
       <div class="meter" aria-hidden="true"><div id="scan-meter"></div></div>
+      <div class="note warn" id="scan-help" hidden></div>
+      <div class="opts two" id="scan-extras" hidden>
+        <button class="btn small" id="torch" hidden>Turn on light</button>
+        <button class="btn small" id="photo-instead" hidden>Take a photo instead</button>
+      </div>
+      <input type="file" id="photo-file" accept="image/*" capture="environment" hidden>
       <p class="small muted" id="store-line"></p>
       <p class="small muted" id="phone-line"></p>
     </div>
@@ -95,6 +101,12 @@
       <div class="label">Your color today</div>
       <div class="card result"><div class="swatch" id="res-swatch"></div><div><div class="stage-num" id="res-num"></div><div id="res-name"></div><div class="small muted" id="res-desc"></div></div></div>
       <div class="ladder" id="res-ladder"></div>
+      <div class="note" id="res-between" hidden></div>
+      <div class="card stack" id="res-about">
+        <div><span class="label">Good for</span><div id="res-uses"></div></div>
+        <p class="small muted" id="res-match"></p>
+        <p class="small muted" id="res-agree" hidden></p>
+      </div>
       <p class="small muted">This is the color measured from your pictures today. It is not a forecast of when the bananas will be ready.</p>
       <fieldset class="card">
         <legend>Does this match what you see?</legend>
