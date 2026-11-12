@@ -50,6 +50,8 @@ input[type=checkbox], input[type=radio] { width: 20px; height: 20px; margin: 0; 
 .chip.navy { background: var(--navy-tint); color: var(--navy); }
 .chip.ok { background: var(--ok-soft); color: var(--ok); }
 .chip.bad { background: var(--danger-soft); color: var(--danger); }
+.chip.big { font-size: 13px; padding: 6px 10px; }
+.opt .two-line strong { display: block; }
 .chip.brass { background: var(--brass-soft); color: var(--brass-ink); }
 
 .steps { display: flex; flex-direction: column; gap: 8px; }
