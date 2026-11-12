@@ -320,4 +320,35 @@ function knnMatch(reading,samples,k){
 }
 function knnReady(samples,min){return KEYS.every(k=>samples.filter(s=>s.stage===k).length>=min);}
 
-export { REFS, KEYS, readSource, matchStage, knnMatch, knnReady };
+// ---- distance estimate (pilot addition) ----
+// A web page has no way to measure distance directly, so this estimates it from how much of the
+// camera's long side the bananas fill: the same fruit looks smaller the farther away it is.
+// It assumes a typical bunch size and a typical phone lens, so treat the inches as approximate.
+function peelSpan(src,sw,sh){
+  const long=160, W=sw>=sh?long:Math.max(8,Math.round(long*sw/sh)), H=sw>=sh?Math.max(8,Math.round(long*sh/sw)):long;
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const cx=cv.getContext('2d'); cx.drawImage(src,0,0,sw,sh,0,0,W,H);
+  const data=cx.getImageData(0,0,W,H).data;
+  const lit=estimateLighting(data,W,H,true);
+  const g=lit.ok?lit.gains:[1,1,1], b=(lit.ok&&lit.conf>0.45)?lit.bias:[0,0];
+  const xs=[],ys=[];
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const i=(y*W+x)*4;
+    const lab=rgb2lab(Math.min(255,data[i]*g[0]),Math.min(255,data[i+1]*g[1]),Math.min(255,data[i+2]*g[2]));
+    if(peelGate(lab[0],lab[1]-b[0],lab[2]-b[1])){xs.push(x);ys.push(y);}
+  }
+  const n=xs.length;
+  if(n<W*H*0.012) return {ok:false,share:n/(W*H)};
+  xs.sort((p,q)=>p-q); ys.sort((p,q)=>p-q);
+  const lo=Math.floor(n*0.02), hi=Math.min(n-1,Math.floor(n*0.98));
+  return {ok:true,share:n/(W*H),frac:Math.max(xs[hi]-xs[lo]+1,ys[hi]-ys[lo]+1)/long};
+}
+function estimateDistance(src,sw,sh,opts){
+  const o=opts||{}, size=o.bananaIn||8, fov=o.fovDeg||60;
+  const p=peelSpan(src,sw,sh);
+  if(!p.ok) return {ok:false};
+  const frac=Math.max(0.05,Math.min(1,p.frac));
+  return {ok:true,frac:frac,inches:size/(2*Math.tan(fov*Math.PI/360)*frac),fills:p.frac>=0.92};
+}
+
+export { REFS, KEYS, readSource, matchStage, knnMatch, knnReady, estimateDistance };

@@ -1,6 +1,6 @@
 // Minimal service worker so the app can be saved to a home screen.
 // Network first, so shoppers always get the latest version; falls back to the last copy when offline.
-const CACHE = 'syc-pilot-v5';
+const CACHE = 'syc-pilot-v6';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (e) => {

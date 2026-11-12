@@ -17,6 +17,10 @@ export const STAGES = [
 // they are on; after that they return to the welcome screen. One survey per session.
 export const SESSION_MS = 5 * 60 * 1000;
 
+// Distance guide. The inches are an estimate from how large the bananas look in the camera,
+// based on a typical bunch size and a typical phone lens.
+export const DISTANCE = { minIn: 12, maxIn: 24, bananaIn: 8, fovDeg: 60, everyMs: 300 };
+
 // Scan behaviour
 export const SCAN = {
   maxMs: 6000,        // longest one live scan may run before it decides
