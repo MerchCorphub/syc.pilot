@@ -1,6 +1,6 @@
 // Scan Your Color pilot: shopper app
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN, SESSION_MS } from './config.js';
 import { REFS, readSource, matchStage, knnMatch, knnReady } from './reader.js';
 
 // Shoppers are never signed in; keep this client separate from any admin session.
@@ -84,13 +84,32 @@ async function ensureDevice() {
 // ---- screens ----
 let current = null;      // the scan now on the result screen
 let justSaved = false;
+// ---- session: 5 minutes from when the app opens ----
+let sessionStart = Date.now(), sessionId = uuid(), sessionSurveyDone = false, sessionNote = '';
+const expired = () => !!sessionStart && Date.now() - sessionStart >= SESSION_MS;
+function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionSurveyDone = false; sessionNote = ''; }
+function endSession(note) {
+  stopCamera();
+  sessionStart = null; sessionSurveyDone = false; current = null; sessionNote = note || '';
+  go('welcome');
+}
+const STARTS_WORK = ['register', 'store', 'scan'];
+
 let screen = null;
 function go(name) {
+  if (STARTS_WORK.includes(name)) {
+    if (!sessionStart) startSession();                       // tapping Start scan after a session ended opens a new one
+    else if (expired()) return endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
+  }
+  if (name === 'saved' && justSaved && expired()) {           // they finished what they were on; now the session ends
+    justSaved = false;
+    return endSession('Your scan is saved. Your 5-minute session has ended. Tap Start scan to begin a new one.');
+  }
   if (name === 'register' && state.shopperId) name = screen === 'store' ? 'welcome' : 'store';
   screen = name;
   document.querySelectorAll('[data-screen]').forEach((s) => { s.hidden = s.dataset.screen !== name; });
   if (name !== 'scan') stopCamera();
-  if (name === 'welcome') $('welcome-saved').hidden = !state.scans.length;
+  if (name === 'welcome') { $('welcome-saved').hidden = !state.scans.length; $('session-note').textContent = sessionNote; $('session-note').hidden = !sessionNote; sessionNote = ''; }
   if (name === 'store') showStores();
   if (name === 'scan') startScanScreen();
   if (name === 'survey') showSurvey();
@@ -101,6 +120,12 @@ document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-go]');
   if (b) go(b.dataset.go);
 });
+setInterval(() => {
+  if (!expired()) return;
+  if (screen === 'welcome' || screen === 'install' || screen === 'bye') sessionStart = null;
+  else if (screen === 'register' || screen === 'store') endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
+  // on the scan, result, survey and saved screens the shopper finishes what they are on first
+}, 5000);
 
 // ---- register ----
 $('reg-save').addEventListener('click', async () => {
@@ -267,7 +292,7 @@ async function logAttempt(fields) {
   const { error } = await db.from('scan_attempts').insert({
     id, device_id: state.deviceId, shopper_id: state.shopperId,
     store_id: state.store ? state.store.id : null, store_name_typed: state.store ? state.store.typed : null,
-    try_anyway: tryAnyway, ...phoneClock(), ...fields,
+    try_anyway: tryAnyway, session_id: sessionId, ...phoneClock(), ...fields,
   });
   if (error) throw error;
   return id;
@@ -483,7 +508,7 @@ $('save-scan').addEventListener('click', async () => {
   state.scans.unshift({ id: current.scanId, stage: current.stage.num, store: current.store, at: Date.now(), survey: false });
   state.scans = state.scans.slice(0, 50); save();
   justSaved = true;
-  go('survey');
+  go(sessionSurveyDone ? 'saved' : 'survey');     // one survey per session
 });
 $('scan-again').addEventListener('click', async () => {
   if (current && document.querySelector('input[name=match]:checked')) await sendFeedback(false);
@@ -543,6 +568,7 @@ $('survey-send').addEventListener('click', async () => {
     if (error) { toast('Could not send your answers. Check your connection and try again.'); return; }
     const mine = state.scans.find((s) => s.id === scanId);
     if (mine) { mine.survey = true; save(); }
+    sessionSurveyDone = true;
   }
   go('saved');
 });
@@ -562,6 +588,15 @@ function showSaved() {
       el('span', { className: 'chip' + (s.survey ? ' ok' : ''), textContent: s.survey ? 'Survey done' : 'No survey' })]));
   });
 }
+
+// ---- exit ----
+$('exit-app').addEventListener('click', () => {
+  stopCamera();
+  sessionStart = null; sessionSurveyDone = false; current = null; justSaved = false;
+  go('bye');
+  try { window.close(); } catch (e) { /* browsers only let a page close itself in some cases */ }
+});
+$('bye-restart').addEventListener('click', () => go('welcome'));
 
 // ---- save to home screen ----
 let installEvent = null;

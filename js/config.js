@@ -13,6 +13,10 @@ export const STAGES = [
   { num: 4, key: 'spotty', name: 'Spotty', fill: '#E9B925', desc: 'Yellow with dark spots', uses: ['Banana bread', 'Freeze', 'Pancakes'] },
 ];
 
+// A session starts when the app opens and lasts this long. The shopper may finish the scan or survey
+// they are on; after that they return to the welcome screen. One survey per session.
+export const SESSION_MS = 5 * 60 * 1000;
+
 // Scan behaviour
 export const SCAN = {
   maxMs: 6000,        // longest one live scan may run before it decides

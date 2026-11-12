@@ -19,6 +19,7 @@
   <section data-screen="welcome" hidden>
     <header class="bar"><div class="brand">My Banana</div><span class="chip navy">Pilot</span></header>
     <div class="body">
+      <div class="note" id="session-note" hidden></div>
       <h1>Check your banana color in seconds</h1>
       <p>Point your phone camera at the bananas. We show which of four color stages they are today.</p>
       <div class="steps">
@@ -152,7 +153,7 @@
     <div class="foot">
       <button class="btn primary" data-go="store">Scan again</button>
       <button class="btn" data-go="install">Save to my home screen</button>
-      <button class="btn" data-go="welcome">Done, back to home</button>
+      <button class="btn" id="exit-app">Exit app</button>
     </div>
   </section>
 
@@ -168,6 +169,16 @@
       <div class="card stack"><h2>Computer (Chrome or Edge)</h2><ol style="margin:0;padding-left:20px"><li>Open the browser menu.</li><li>Choose Install or Create shortcut.</li><li>The icon appears on your desktop.</li></ol></div>
     </div>
     <div class="foot"><button class="btn primary" data-go="register">Go to scan</button></div>
+  </section>
+
+  <!-- Exit -->
+  <section data-screen="bye" hidden>
+    <header class="bar"><div class="brand">My Banana</div><span class="chip navy">Pilot</span></header>
+    <div class="body">
+      <h1>You're all done</h1>
+      <p>Thank you for scanning. Your session has ended and the camera is off. You can close this page now.</p>
+    </div>
+    <div class="foot"><button class="btn" id="bye-restart">Start a new session</button></div>
   </section>
 
   <div class="toast note err" id="toast" role="alert" hidden></div>
