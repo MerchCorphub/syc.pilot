@@ -1,7 +1,8 @@
 // Scan Your Color pilot: shopper app
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN, SESSION_MS, DISTANCE } from './config.js';
-import { REFS, readSource, matchStage, knnMatch, knnReady, estimateDistance } from './reader.js';
+import { readSource, knnReady, estimateDistance, peelProfile } from './reader.js';
+import { classify, effectiveRefs, isDim } from './classify.js';
 
 // Shoppers are never signed in; keep this client separate from any admin session.
 const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -201,13 +202,16 @@ async function loadLibrary() {
       stage: (STAGES.find((s) => s.num === Number(x.stage)) || {}).key,
       hue: +x.hue || 0, spot: +x.spot || 0, L: +x.L || 0, chroma: +x.chroma || 0, cct: +x.cct || 0, src: x.src || 'staff',
     })).filter((x) => x.stage);
-    lib = { samples, stats: data.stats || [], staff: samples.filter((x) => x.src === 'staff').length, shopper: samples.filter((x) => x.src !== 'staff').length };
+    const settings = data.settings || {};
+    lib = { samples, settings, eff: effectiveRefs(samples, settings), stats: data.stats || [], staff: samples.filter((x) => x.src === 'staff').length, shopper: samples.filter((x) => x.src !== 'staff').length };
     libAt = Date.now();
   } catch (e) { /* keep reading from the chart */ }
 }
 const learned = () => !!lib && knnReady(lib.samples, SCAN.knnMin);
-// Learned samples win once every stage has enough of them; until then the chart numbers.
-const matchNow = (r) => (learned() ? knnMatch(r, lib.samples, SCAN.knnK) : matchStage(r, REFS, r.light, null));
+const NO_LIB = { samples: [], settings: {}, eff: effectiveRefs([], {}) };
+// Three checks vote: hue match (chart blended with staff pictures, or the learned library), color share, dark spots.
+const matchNow = (r, profile) => classify(r, profile, lib || NO_LIB);
+const profileOf = (source, w, h, still) => { try { return peelProfile(source, w, h, still); } catch (e) { return null; } };
 
 // ---- camera and scan ----
 const video = $('video');
@@ -227,9 +231,26 @@ function showDistance(d) {
   else if (distIn > DISTANCE.maxIn) { box.className = 'dist move'; box.textContent = 'About ' + inches + ' in. Move closer.'; }
   else { box.className = 'dist good'; box.textContent = 'About ' + inches + ' in. Good distance.'; }
 }
+let lightHelp = false, lightTick = 0, dimCount = 0;
+function checkLight() {
+  if (scanning) return;
+  let r = null;
+  try { r = readSource(video, video.videoWidth, video.videoHeight, true); } catch (e) { return; }
+  const dim = (r && r.ok) ? isDim(r, lib ? lib.settings : {}) : !!(r && r.light && r.light.klass === 'too dark');
+  dimCount = dim ? Math.min(4, dimCount + 1) : Math.max(0, dimCount - 1);
+  const helpFree = $('scan-help').hidden || lightHelp;            // never overwrite a failed-scan message
+  if (dimCount >= 2 && helpFree) {
+    lightHelp = true;
+    scanHelp('The light is low, so colors can read greener than they are. ' + ($('torch').hidden ? 'Turn on a light or move to a brighter spot before you scan.' : (torchOn ? 'The phone light is on.' : 'Tap Turn on light before you scan.')));
+  } else if (dimCount === 0 && lightHelp) { lightHelp = false; scanHelp(''); }
+}
 function startDistance() {
-  clearInterval(distTimer); distIn = null;
-  distTimer = setInterval(() => { if (stream && video.videoWidth) showDistance(distanceOf(video, video.videoWidth, video.videoHeight)); }, DISTANCE.everyMs);
+  clearInterval(distTimer); distIn = null; lightHelp = false; dimCount = 0;
+  distTimer = setInterval(() => {
+    if (!stream || !video.videoWidth) return;
+    showDistance(distanceOf(video, video.videoWidth, video.videoHeight));
+    if (++lightTick % 2 === 0) checkLight();
+  }, DISTANCE.everyMs);
 }
 
 function stopCamera() {
@@ -322,7 +343,7 @@ async function logAttempt(fields) {
 function readStill(source, w, h) {
   try {
     const r = readSource(source, w, h, true, true);
-    if (r && r.ok) return { sm: r, m: matchNow(r), light: r.light };
+    if (r && r.ok) return { sm: r, m: matchNow(r, profileOf(source, w, h, true)), light: r.light };
     return { light: r && r.light };
   } catch (e) { return {}; }
 }
@@ -351,7 +372,7 @@ $('scan-now').addEventListener('click', runScan);
 async function runScan() {
   if (scanning || !stream || !video.videoWidth) return;
   scanning = true;
-  $('scan-now').disabled = true; scanHelp('');
+  $('scan-now').disabled = true; scanHelp(''); lightHelp = false;
   const t0 = performance.now();
   const readings = [], photos = [];
   let sm = null, hold = 0, lastPhoto = 0, pick = null, how = null, lastLight = null;
@@ -366,10 +387,10 @@ async function runScan() {
       if (r && r.light) lastLight = r.light;
       if (r && r.ok) {
         sm = sm ? Object.assign({}, r, { hue: sm.hue * 0.45 + r.hue * 0.55, spot: sm.spot * 0.45 + r.spot * 0.55 }) : r;
-        const m = matchNow(sm);
+        const m = matchNow(sm, profileOf(video, video.videoWidth, video.videoHeight, false));
         readings.push({ m, sm });
         hold = m.conf >= SCAN.lockConfidence ? hold + 1 : 0;
-        $('cam-msg').textContent = 'Reading color… hold steady';
+        $('cam-msg').textContent = m.dim ? 'Low light. Reading color… a light will help' : 'Reading color… hold steady';
         if (photos.length < SCAN.photos && now - lastPhoto > 500) { photos.push(grabPhoto()); lastPhoto = now; }
         if (hold >= SCAN.lockFrames) { pick = { m: Object.assign({}, m), sm }; how = 'locked'; return resolve(); }
         if (readings.length >= SCAN.quickReadings) {
@@ -428,7 +449,9 @@ async function finishScan(pick, photos, readings, how, photoDistance) {
         hue: r1(pick.sm.hue), chroma: r1(pick.sm.chroma), L: r1(pick.sm.L), spot: r1(pick.sm.spot),
         peel_share: r1(pick.sm.peelShare), hex: pick.sm.hex || null,
         confidence: Math.round(pick.m.conf * 100) / 100, second: pick.m.second || null, between: !!pick.m.between,
-        decided: how, locked: how === 'locked', method: usedLearned ? 'learned' : 'chart',
+        decided: how, locked: how === 'locked', method: usedLearned ? 'vote+learned' : 'vote+chart',
+        checks: pick.m.methods || null, checks_agree: pick.m.agree || null, checks_run: pick.m.voters || null,
+        shares: pick.m.shares || null, low_light: !!pick.m.dim, spot_adjusted: pick.m.spotAdj === undefined ? null : pick.m.spotAdj,
         votes: usedLearned ? pick.m.votes : null, neighbours: usedLearned ? pick.m.k : null,
         library_staff: lib ? lib.staff : 0, library_shopper: lib ? lib.shopper : 0,
         distance_in: dist === null || dist === undefined ? null : Math.round(dist),
@@ -440,7 +463,7 @@ async function finishScan(pick, photos, readings, how, photoDistance) {
     if (error) throw error;
     uploadPhotos(scanId, photos);        // runs in the background
     current = { scanId, stage, second, between: !!pick.m.between && !!second, store: state.store.name,
-      learned: usedLearned, votes: pick.m.votes, neighbours: pick.m.k };
+      learned: usedLearned, votes: pick.m.votes, neighbours: pick.m.k, agree: pick.m.agree, voters: pick.m.voters, dim: !!pick.m.dim };
     showResult();
   } catch (e) {
     $('cam-msg').textContent = 'Could not save this scan. Check your connection and try again.';
@@ -501,7 +524,9 @@ function showResult() {
   $('res-uses').textContent = (s.uses || []).join(' · ');
   $('res-match').textContent = current.learned
     ? current.votes + ' of the ' + current.neighbours + ' closest reference pictures are ' + s.name + ' (from ' + (lib.staff + lib.shopper) + ' pictures in the library).'
-    : 'Matched against the color chart.';
+    : (lib && lib.staff ? 'Matched against the color chart and ' + lib.staff + ' staff picture' + (lib.staff === 1 ? '' : 's') + '.' : 'Matched against the color chart.');
+  if (current.voters > 1) $('res-match').textContent += ' ' + current.agree + ' of ' + current.voters + ' color checks agree.';
+  if (current.dim) $('res-match').textContent += ' The light was low, so this reading is less certain.';
   const st = lib && (lib.stats || []).find((x) => Number(x.stage) === s.num);
   $('res-agree').hidden = !(st && st.checked >= 5);
   if (st && st.checked >= 5) $('res-agree').textContent = st.agreed + ' of ' + st.checked + ' shoppers who got ' + s.name + ' said it matched what they saw.';

@@ -1,7 +1,8 @@
 // Scan Your Color pilot: admin pages (sign-in required)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, STAGES, SCAN } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, STAGES, SCAN, READER } from './config.js';
 import { readSource } from './reader.js';
+import { effectiveRefs } from './classify.js';
 
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = (id) => document.getElementById(id);
@@ -351,21 +352,84 @@ async function libraryTab() {
   const ready = STAGES.every((s) => count(s.num, 'staff') + count(s.num, 'shopper') >= SCAN.knnMin);
   view.append(el('div', { className: 'head' }, [
     el('div', { className: 'stack', style: 'flex:1 1 420px' }, [el('h1', { textContent: 'Reference pictures' }),
-      el('p', { className: 'muted', textContent: 'Staff pictures teach the reader what each stage looks like. Shopper scans the shopper agreed with are added automatically, at a lower weight. Once every stage has ' + SCAN.knnMin + ' or more pictures, new scans are matched against these pictures instead of the fixed color chart.' })]),
-    el('span', { className: 'chip ' + (ready ? 'ok' : 'brass'), textContent: ready ? 'Learned matching is on' : 'Using the color chart' })]));
+      el('p', { className: 'muted', textContent: 'Staff pictures teach the reader what each stage looks like. Shopper scans the shopper agreed with are added automatically, at a lower weight. Staff pictures start shaping a stage\'s color from the first one. Once every stage has ' + SCAN.knnMin + ' or more pictures, new scans are matched against the whole picture library.' })]),
+    el('span', { className: 'chip ' + (ready ? 'ok' : 'brass'), textContent: ready ? 'Learned matching is on' : 'Chart blended with staff pictures' })]));
 
   const cards = STAGES.map((s) => {
     const staff = count(s.num, 'staff'), shopper = count(s.num, 'shopper'), total = staff + shopper;
     const input = el('input', { type: 'file', accept: 'image/*', multiple: true, id: 'ref-' + s.num, style: 'min-height:44px' });
     input.addEventListener('change', () => addSamples(s, input));
+    const mine = (own.data || []).filter((r) => r.stage === s.num);
+    const hueLine = mine.length ? 'Staff picture hues: ' + mine.map((r) => Number(r.hue).toFixed(1)).join(', ') : 'No staff pictures yet.';
+    const clear = el('button', { className: 'btn danger small', textContent: 'Remove all staff pictures of this stage', disabled: !mine.length });
+    clear.addEventListener('click', async () => {
+      if (!window.confirm('Remove all ' + mine.length + ' staff pictures of Stage ' + s.num + ': ' + s.name + '? The reader stops learning from them.')) return;
+      const paths = mine.map((r) => r.photo_path).filter(Boolean);
+      if (paths.length) await db.storage.from(PHOTO_BUCKET).remove(paths);
+      const { error } = await db.from('reference_samples').delete().eq('stage', s.num);
+      if (error) return toast('Could not remove the pictures.');
+      view.textContent = ''; libraryTab();
+    });
     return el('div', { className: 'card stack' }, [
       el('div', { className: 'result' }, [el('div', { className: 'swatch', style: 'width:48px;height:48px;background:' + s.fill }), el('div', {}, [el('h2', { textContent: 'Stage ' + s.num + ': ' + s.name }), el('div', { className: 'small muted', textContent: s.desc })])]),
       el('div', { className: 'fig', textContent: String(total) }),
       el('div', { className: 'small muted', textContent: staff + ' staff · ' + shopper + ' shopper-agreed' + (total < SCAN.knnMin ? ' · needs ' + (SCAN.knnMin - total) + ' more' : '') }),
-      el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'ref-' + s.num, textContent: 'Add staff pictures of this stage' }), input])]);
+      el('div', { className: 'small', textContent: hueLine }),
+      el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'ref-' + s.num, textContent: 'Add staff pictures of this stage' }), input]),
+      clear]);
   });
   view.append(el('div', { className: 'cols' }, cards));
   view.append(el('p', { className: 'small muted', id: 'ref-msg', textContent: 'Tip: on a phone, the picture button opens the camera. Fill the frame with the bananas, in the store\'s normal light.' }));
+
+  // ---- stage colors and hue settings ----
+  const settings = JSON.parse(JSON.stringify((all.data && all.data.settings) || {}));
+  settings.stages = settings.stages || {};
+  const staffSamples = (own.data || []).map((r) => ({ stage: (STAGES.find((x) => x.num === r.stage) || {}).key, hue: Number(r.hue), spot: Number(r.spot) || 0, src: 'staff' }));
+  const eff = effectiveRefs(staffSamples, settings);
+  const f1 = (n) => (n === null || n === undefined ? 'None' : Number(n).toFixed(1));
+  const st = el('table', { style: 'min-width:980px' }, [el('thead', {}, [el('tr', {}, ['Stage', 'Chart hue', 'Staff pictures', 'Hue in use', 'Use chart color', 'My hue (blank = automatic)', 'Hue variation ± (blank = automatic)'].map((t) => el('th', { textContent: t })))])]);
+  const sb = el('tbody'); st.append(sb);
+  const inputs = {};
+  STAGES.forEach((s) => {
+    const i = eff.info[s.key], c = settings.stages[s.num] || {};
+    const useChart = el('input', { type: 'checkbox', checked: c.use_chart !== false, ariaLabel: 'Use the chart color for Stage ' + s.num });
+    const myHue = el('input', { type: 'text', inputMode: 'decimal', value: typeof c.hue === 'number' ? String(c.hue) : '', ariaLabel: 'My hue for Stage ' + s.num, style: 'width:110px;min-height:44px' });
+    const vary = el('input', { type: 'text', inputMode: 'decimal', value: typeof c.variation === 'number' ? String(c.variation) : '', ariaLabel: 'Hue variation for Stage ' + s.num, style: 'width:110px;min-height:44px' });
+    inputs[s.num] = { useChart, myHue, vary };
+    sb.append(el('tr', {}, [
+      el('td', {}, [el('div', { className: 'result', style: 'gap:8px' }, [el('div', { className: 'swatch', style: 'width:24px;height:24px;background:' + s.fill }), el('strong', { textContent: 'Stage ' + s.num + ': ' + s.name })])]),
+      el('td', { textContent: f1(i.chart) }),
+      el('td', { textContent: i.staffN ? i.staffN + ' · average ' + f1(i.staffMean) + ' · range ' + f1(i.staffMin) + ' to ' + f1(i.staffMax) : 'None' }),
+      el('td', {}, [el('strong', { textContent: f1(i.used) }), el('div', { className: 'small muted', textContent: i.source })]),
+      el('td', {}, [useChart]), el('td', {}, [myHue]), el('td', {}, [vary])]));
+  });
+  const low = el('input', { type: 'text', inputMode: 'decimal', id: 'low-light', value: typeof settings.low_light_L === 'number' ? String(settings.low_light_L) : '', placeholder: String(READER.lowLightL), style: 'width:110px;min-height:44px' });
+  const saveBtn = el('button', { className: 'btn brass small', textContent: 'Save hue settings' });
+  saveBtn.addEventListener('click', async () => {
+    const parse = (v, lo, hi, what) => { const t = String(v).trim(); if (!t) return null; const n = Number(t); if (!isFinite(n) || n < lo || n > hi) throw new Error(what + ' must be a number from ' + lo + ' to ' + hi + '.'); return n; };
+    const next = { stages: {} };
+    try {
+      STAGES.forEach((s) => {
+        const h = parse(inputs[s.num].myHue.value, 60, 140, 'My hue for Stage ' + s.num), v = parse(inputs[s.num].vary.value, 2, 30, 'Hue variation for Stage ' + s.num);
+        const row = { use_chart: inputs[s.num].useChart.checked }; if (h !== null) row.hue = h; if (v !== null) row.variation = v;
+        next.stages[s.num] = row;
+      });
+      const l = parse(low.value, 40, 85, 'Low-light level'); if (l !== null) next.low_light_L = l;
+    } catch (e) { return toast(e.message); }
+    const { error } = await db.from('reader_settings').upsert({ id: 1, settings: next, updated_at: new Date().toISOString() });
+    if (error) return toast('Could not save the settings.');
+    toast('Hue settings saved. New scans use them within about 10 minutes, or right away after the app is reopened.', true);
+    view.textContent = ''; libraryTab();
+  });
+  const warn = [];
+  if (!eff.ordered) warn.push('The hues in use are out of order. They should step down from Stage 1 (greenest, highest number) to Stage 4.');
+  eff.close.forEach(([a, b]) => { const A = STAGES.find((x) => x.key === a), B = STAGES.find((x) => x.key === b); warn.push('Stage ' + A.num + ' and Stage ' + B.num + ' are less than 2.5 apart, so the reader will mix them up. Add staff pictures of both, or set your own hues.'); });
+  view.append(el('div', { className: 'card stack' }, [
+    el('h2', { textContent: 'Stage colors and hue settings' }),
+    el('p', { className: 'small muted', textContent: 'Hue is the color angle the reader measures: about 110 is green, 100 is green-yellow, 90 is deep yellow. "Hue in use" is what each stage is matched against. Untick "Use chart color" to remove the built-in color for a stage and rely on its staff pictures alone. "My hue" overrides everything for that stage. "Hue variation" is how far a reading may be from the stage hue and still count as a dead-on match; the reader caps it so neighbouring stages never overlap.' }),
+    warn.length ? el('div', { className: 'note warn' }, warn.map((w) => el('p', { textContent: w }))) : el('span'),
+    el('div', { className: 'scroll' }, [st]),
+    el('div', { className: 'inline' }, [el('label', { htmlFor: 'low-light' }, ['Low-light level (peel lightness; warn below this)', low]), saveBtn])]));
 
   const table = el('table', {}, [el('thead', {}, [el('tr', {}, ['Stage', 'Added', 'Hue', 'Spots', 'Photo', ''].map((t) => el('th', { textContent: t })))])]);
   const body = el('tbody'); table.append(body);

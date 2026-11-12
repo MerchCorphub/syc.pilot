@@ -3,7 +3,7 @@
 export const SUPABASE_URL = 'https://fkuppeocewsffiraojyz.supabase.co';
 export const SUPABASE_KEY = 'sb_publishable_du0Kb3KGUVGmr7LUo4XEwA_9hkvLu1T';
 export const PHOTO_BUCKET = 'scan-photos';
-export const READER_VERSION = { chart: 'chart-refs-1', learned: 'knn-1' };
+export const READER_VERSION = { chart: 'vote-1', learned: 'vote-knn-1' };
 
 // Four color stages, from the SYC working model.
 export const STAGES = [
@@ -21,13 +21,21 @@ export const SESSION_MS = 5 * 60 * 1000;
 // based on a typical bunch size and a typical phone lens.
 export const DISTANCE = { minIn: 12, maxIn: 24, bananaIn: 8, fovDeg: 60, everyMs: 300 };
 
+// Reader defaults. The admin page can change these per stage (Reference pictures tab).
+export const READER = {
+  chartWeight: 2,      // the built-in chart color counts like this many staff pictures when blending
+  lowLightL: 63,       // peel lightness below this is treated as low light (warn, and discount dark spots)
+  shareWeight: 0.8,    // weight of the green/yellow share vote next to the hue vote (1.0)
+  spotWeight: 0.9,     // weight of the dark-spot vote when it fires
+};
+
 // Scan behaviour
 export const SCAN = {
   maxMs: 6000,        // longest one live scan may run before it decides
   giveUpMs: 3500,     // stop early when nothing readable has been seen by now, and show what to fix
   readEveryMs: 100,   // time between color readings
   lockConfidence: 0.85,
-  lockFrames: 3,
+  lockFrames: 5,
   quickReadings: 8,   // after this many readings, accept as soon as one stage has a clear lead
   quickShare: 0.6,    // share of readings the leading stage needs for that quick decision
   minReadings: 3,     // at time-out, readings needed to accept the leading stage (a 50/50 scan leans to the leader)

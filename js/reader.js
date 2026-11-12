@@ -351,4 +351,31 @@ function estimateDistance(src,sw,sh,opts){
   return {ok:true,frac:frac,inches:size/(2*Math.tan(fov*Math.PI/360)*frac),fills:p.frac>=0.92};
 }
 
-export { REFS, KEYS, readSource, matchStage, knnMatch, knnReady, estimateDistance };
+// ---- peel profile (pilot addition) ----
+// The spread of hue across the peel, not just its average: how much of the peel is on the green
+// side and how much on the yellow side. Same crop, color correction and peel test as readSource.
+function peelProfile(src,sw,sh,still){
+  const S=120;
+  const cv=document.createElement('canvas'); cv.width=S; cv.height=S;
+  const cx=cv.getContext('2d');
+  const side=Math.min(sw,sh);
+  if(still) cx.drawImage(src,0,0,sw,sh,0,0,S,S); else cx.drawImage(src,(sw-side)/2,(sh-side)/2,side,side,0,0,S,S);
+  const data=cx.getImageData(0,0,S,S).data;
+  const lit=estimateLighting(data,S,S,!!still);
+  const g=lit.ok?lit.gains:[1,1,1], b=(lit.ok&&lit.conf>0.45)?lit.bias:[0,0];
+  const bins=new Array(181).fill(0);
+  const c0=S/2, r2=still?Infinity:Math.pow(S*0.34,2);
+  let n=0;
+  for(let y=0;y<S;y++) for(let x=0;x<S;x++){
+    if((x-c0)*(x-c0)+(y-c0)*(y-c0)>r2) continue;
+    const i=(y*S+x)*4;
+    const lab=rgb2lab(Math.min(255,data[i]*g[0]),Math.min(255,data[i+1]*g[1]),Math.min(255,data[i+2]*g[2]));
+    const A=lab[1]-b[0], B=lab[2]-b[1];
+    if(!peelGate(lab[0],A,B)) continue;
+    const hu=(Math.atan2(B,A)*180/Math.PI+360)%360;
+    bins[Math.max(0,Math.min(180,Math.round(hu)))]++; n++;
+  }
+  return {ok:n>=80,n:n,bins:bins,lum:lit.lum};
+}
+
+export { REFS, KEYS, readSource, matchStage, knnMatch, knnReady, estimateDistance, peelProfile };
