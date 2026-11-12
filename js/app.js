@@ -1,6 +1,6 @@
 // Scan Your Color pilot: shopper app
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN, SESSION_MS, DISTANCE } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN, SESSION_MS, DISTANCE, EATING } from './config.js';
 import { readSource, knnReady, estimateDistance, peelProfile } from './reader.js';
 import { classify, effectiveRefs, isDim } from './classify.js';
 
@@ -88,19 +88,23 @@ let justSaved = false;
 // ---- session: 5 minutes from when the app opens ----
 let sessionStart = Date.now(), sessionId = uuid(), sessionSurveyDone = false, sessionNote = '';
 const expired = () => !!sessionStart && Date.now() - sessionStart >= SESSION_MS;
-function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionSurveyDone = false; sessionNote = ''; }
+function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionSurveyDone = false; sessionNote = ''; eatTime = null; }
 function endSession(note) {
   stopCamera();
-  sessionStart = null; sessionSurveyDone = false; current = null; sessionNote = note || '';
+  sessionStart = null; sessionSurveyDone = false; current = null; sessionNote = note || ''; eatTime = null;
   go('welcome');
 }
-const STARTS_WORK = ['register', 'store', 'scan'];
+const STARTS_WORK = ['register', 'store', 'eat', 'scan'];
+
+// ---- Ready When You Are: the shopper's eating plan, kept for this session only ----
+let eatTime = null;         // desiredEatingTime: today | tomorrow | 2_3_days | later_this_week
+let eatReturn = false;      // true when the shopper is changing the plan from a result
 
 let screen = null;
 function go(name) {
   if (STARTS_WORK.includes(name)) {
     if (!sessionStart) startSession();                       // tapping Start scan after a session ended opens a new one
-    else if (expired()) return endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
+    else if (expired() && !(name === 'eat' && eatReturn)) return endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
   }
   if (name === 'saved' && justSaved && expired()) {           // they finished what they were on; now the session ends
     justSaved = false;
@@ -112,6 +116,7 @@ function go(name) {
   if (name !== 'scan') stopCamera();
   if (name === 'welcome') { $('welcome-saved').hidden = !state.scans.length; $('session-note').textContent = sessionNote; $('session-note').hidden = !sessionNote; sessionNote = ''; }
   if (name === 'store') showStores();
+  if (name === 'eat') showEat();
   if (name === 'scan') startScanScreen();
   if (name === 'survey') showSurvey();
   if (name === 'saved') showSaved();
@@ -124,7 +129,7 @@ document.addEventListener('click', (e) => {
 setInterval(() => {
   if (!expired()) return;
   if (screen === 'welcome' || screen === 'install' || screen === 'bye') sessionStart = null;
-  else if (screen === 'register' || screen === 'store') endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
+  else if (screen === 'register' || screen === 'store' || (screen === 'eat' && !eatReturn)) endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
   // on the scan, result, survey and saved screens the shopper finishes what they are on first
 }, 5000);
 
@@ -188,7 +193,8 @@ $('store-next').addEventListener('click', () => {
     state.store = { id: s.id, name: s.name, typed: null };
   }
   save();
-  go('scan');
+  eatReturn = false;
+  go('eat');
 });
 
 // ---- reference library (what the reader has learned) ----
@@ -212,6 +218,50 @@ const NO_LIB = { samples: [], settings: {}, eff: effectiveRefs([], {}) };
 // Three checks vote: hue match (chart blended with staff pictures, or the learned library), color share, dark spots.
 const matchNow = (r, profile) => classify(r, profile, lib || NO_LIB);
 const profileOf = (source, w, h, still) => { try { return peelProfile(source, w, h, still); } catch (e) { return null; } };
+
+// ---- Ready When You Are: screen, rules and result ----
+function showEat() {
+  const list = $('eat-list'); list.textContent = '';
+  EATING.options.forEach((o) => {
+    const input = el('input', { type: 'radio', name: 'eat', value: o.key, checked: eatTime === o.key });
+    list.append(el('label', { className: 'opt' }, [input, el('span', { className: 'two-line' }, [el('strong', { textContent: o.label }), el('span', { className: 'small muted', textContent: o.line })])]));
+  });
+  $('eat-next').disabled = !eatTime;
+  $('eat-next').textContent = eatReturn ? 'Update My Result' : 'Continue to Scan';
+}
+$('eat-list').addEventListener('change', () => { $('eat-next').disabled = !document.querySelector('input[name=eat]:checked'); });
+$('eat-back').addEventListener('click', () => { if (eatReturn && current) { eatReturn = false; go('result'); } else go('store'); });
+$('eat-next').addEventListener('click', async () => {
+  const v = (document.querySelector('input[name=eat]:checked') || {}).value;
+  if (!v) return;
+  eatTime = v;
+  if (eatReturn && current) {            // plan changed after a result: re-judge the same scan
+    eatReturn = false;
+    const m = planMatch(current.stage.num, eatTime);
+    db.rpc('record_scan_plan', { p_scan_id: current.scanId, p_device_id: state.deviceId, p_eating_time: eatTime, p_match_category: m.category }).then(() => {}, () => {});
+    drawPlan(); go('result');
+    return;
+  }
+  go('scan');
+});
+// The rules layer: stage (1 to 4) + plan -> category and a short explanation. The color reader is not involved.
+function planMatch(stageNum, plan) {
+  const good = EATING.good[plan] || [];
+  let category, why;
+  if (good.includes(stageNum)) { category = 'good_match'; why = (plan === 'today' && stageNum === 4) ? EATING.explain.softer : EATING.explain.good_match[plan]; }
+  else if (stageNum > Math.max(...good)) { category = 'ready_earlier'; why = EATING.explain.ready_earlier; }
+  else { category = 'needs_more_time'; why = EATING.explain.needs_more_time; }
+  return { category, label: EATING.categories[category], why: why + ' ' + EATING.explain.always };
+}
+function drawPlan() {
+  if (!current || !eatTime) { $('res-plan').hidden = true; return; }
+  const o = EATING.options.find((x) => x.key === eatTime), m = planMatch(current.stage.num, eatTime);
+  $('res-plan').hidden = false;
+  $('res-plan-text').textContent = o.plan;
+  $('res-plan-chip').textContent = m.label;
+  $('res-plan-chip').className = 'chip big ' + (m.category === 'good_match' ? 'ok' : 'brass');
+  $('res-plan-why').textContent = m.why;
+}
 
 // ---- camera and scan ----
 const video = $('video');
@@ -266,6 +316,7 @@ function scanHelp(text, offerPhoto) {
 
 async function startScanScreen() {
   if (!state.store) { go('store'); return; }
+  if (!eatTime) { eatReturn = false; go('eat'); return; }
   $('scan-now').disabled = true;
   $('scan-meter').style.width = '0';
   $('cam-msg').textContent = 'Starting camera…';
@@ -333,7 +384,7 @@ async function logAttempt(fields) {
   const { error } = await db.from('scan_attempts').insert({
     id, device_id: state.deviceId, shopper_id: state.shopperId,
     store_id: state.store ? state.store.id : null, store_name_typed: state.store ? state.store.typed : null,
-    try_anyway: tryAnyway, session_id: sessionId, ...phoneClock(), ...fields,
+    try_anyway: tryAnyway, session_id: sessionId, eating_time: eatTime, ...phoneClock(), ...fields,
   });
   if (error) throw error;
   return id;
@@ -444,6 +495,7 @@ async function finishScan(pick, photos, readings, how, photoDistance) {
     const { error } = await db.from('scans').insert({
       id: scanId, attempt_id: attemptId, device_id: state.deviceId, shopper_id: state.shopperId,
       store_id: state.store.id, store_name_typed: state.store.typed,
+      eating_time: eatTime, match_category: planMatch(stage.num, eatTime).category,
       stage: stage.num, reader_version: usedLearned ? READER_VERSION.learned : READER_VERSION.chart, ...phoneClock(),
       color_values: {
         hue: r1(pick.sm.hue), chroma: r1(pick.sm.chroma), L: r1(pick.sm.L), spot: r1(pick.sm.spot),
@@ -518,6 +570,7 @@ function showResult() {
     ladder.append(el('div', { className: x.num === s.num ? 'on' : '' }, [
       el('i', { style: 'background:' + x.fill }), el('span', { textContent: x.num === s.num ? 'Your scan' : 'Stage ' + x.num })]));
   });
+  drawPlan();
   // more about this color
   $('res-between').hidden = !current.between;
   if (current.between) $('res-between').textContent = 'Your bananas are between Stage ' + Math.min(s.num, current.second.num) + ' and Stage ' + Math.max(s.num, current.second.num) + '. They lean toward Stage ' + s.num + ': ' + s.name + '.';
@@ -560,6 +613,7 @@ $('save-scan').addEventListener('click', async () => {
   justSaved = true;
   go(sessionSurveyDone ? 'saved' : 'survey');     // one survey per session
 });
+$('change-plan').addEventListener('click', () => { eatReturn = true; go('eat'); });
 $('scan-again').addEventListener('click', async () => {
   if (current && document.querySelector('input[name=match]:checked')) await sendFeedback(false);
   go('scan');
@@ -642,7 +696,7 @@ function showSaved() {
 // ---- exit ----
 $('exit-app').addEventListener('click', () => {
   stopCamera();
-  sessionStart = null; sessionSurveyDone = false; current = null; justSaved = false;
+  sessionStart = null; sessionSurveyDone = false; current = null; justSaved = false; eatTime = null;
   go('bye');
   try { window.close(); } catch (e) { /* browsers only let a page close itself in some cases */ }
 });

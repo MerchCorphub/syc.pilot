@@ -1,6 +1,6 @@
 // Scan Your Color pilot: admin pages (sign-in required)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, STAGES, SCAN, READER } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, STAGES, SCAN, READER, EATING } from './config.js';
 import { readSource } from './reader.js';
 import { effectiveRefs } from './classify.js';
 
@@ -71,9 +71,9 @@ async function loadData() {
   if (filters.range === '7') from = new Date(Date.now() - 7 * 86400000);
   if (filters.range === 'today') { from = new Date(); from.setHours(0, 0, 0, 0); }
   let q = db.from('scan_attempts').select(
-    'id,created_at,phone_time,phone_timezone,result,failure_reason,try_anyway,device_id,shopper_id,store_id,store_name_typed,' +
+    'id,created_at,phone_time,phone_timezone,result,failure_reason,try_anyway,device_id,shopper_id,store_id,store_name_typed,session_id,eating_time,' +
     'devices(phone_model,os,browser),stores(name),' +
-    'scans(id,stage,saved,shopper_match,shopper_stage,reader_version,color_values,scan_photos(id,storage_path,photo_deleted_at))'
+    'scans(id,stage,saved,shopper_match,shopper_stage,reader_version,color_values,eating_time,match_category,scan_photos(id,storage_path,photo_deleted_at))'
   ).order('created_at', { ascending: false }).limit(5000);
   let a = db.from('survey_answers').select('id,question_id,question_text_asked,answer,scan_id,created_at').order('created_at', { ascending: false }).limit(10000);
   if (from) { q = q.gte('created_at', from.toISOString()); a = a.gte('created_at', from.toISOString()); }
@@ -141,6 +141,27 @@ function drawData() {
     mini('Phones that came back', phones.filter((n) => n > 1).length),
     mini('Average scans per phone', phones.length ? (rows.length / phones.length).toFixed(1) : '0')])]));
 
+  // Ready When You Are: eating plans and how the scans matched them
+  const planLabel = (k) => { const o = EATING.options.find((x) => x.key === k); return o ? o.label : 'Not chosen'; };
+  const planned = ok.filter((r) => r.scan && r.scan.eating_time);
+  const planBars = el('div', { className: 'bars' });
+  EATING.options.forEach((o) => {
+    const n = planned.filter((r) => r.scan.eating_time === o.key).length;
+    planBars.append(el('div', { textContent: o.label }), el('div', { className: 'track' }, [el('div', { style: 'width:' + pct(n, planned.length) })]), el('div', { className: 'val', textContent: n + ' · ' + pct(n, planned.length) }));
+  });
+  const top = EATING.options.map((o) => [o.label, planned.filter((r) => r.scan.eating_time === o.key).length]).sort((a, b) => b[1] - a[1])[0];
+  const good = planned.filter((r) => r.scan.match_category === 'good_match').length;
+  const sess = {}; rows.forEach((r) => { if (r.session_id) sess[r.session_id] = (sess[r.session_id] || 0) + 1; });
+  const sessCounts = Object.values(sess);
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'When shoppers want to eat their bananas' }),
+    el('div', { className: 'tiles' }, [
+      mini('Most chosen timeframe', planned.length && top[1] ? top[0] : 'None yet'),
+      mini('Scans that were a Good Match', planned.length ? pct(good, planned.length) : 'None yet'),
+      mini('May Be Ready Earlier', planned.filter((r) => r.scan.match_category === 'ready_earlier').length),
+      mini('May Need More Time', planned.filter((r) => r.scan.match_category === 'needs_more_time').length),
+      mini('Scans per shopping session', sessCounts.length ? (sessCounts.reduce((t, n) => t + n, 0) / sessCounts.length).toFixed(1) : 'None yet')]),
+    planBars]));
+
   // stage spread + phones
   const bars = el('div', { className: 'bars' });
   STAGES.forEach((s) => {
@@ -178,7 +199,7 @@ function drawData() {
   const shown = logRows(rows);
   const exp = el('button', { className: 'btn primary small', textContent: 'Export scan log (CSV)' }); exp.addEventListener('click', () => exportCsv(shown));
   const del = el('button', { className: 'btn danger small', textContent: 'Delete selected' }); del.addEventListener('click', () => deleteSelected());
-  const table = el('table', { style: 'min-width:1200px' }, [el('thead', {}, [el('tr', {}, ['Select', 'Phone date · time', 'Store', 'Result', 'Stage', 'Photo', 'Shopper check', 'Phone', 'Shopper', 'Saved', 'Survey'].map((t) => el('th', { textContent: t })))])]);
+  const table = el('table', { style: 'min-width:1400px' }, [el('thead', {}, [el('tr', {}, ['Select', 'Phone date · time', 'Store', 'Result', 'Stage', 'Eating plan', 'Plan match', 'Photo', 'Shopper check', 'Phone', 'Shopper', 'Saved', 'Survey'].map((t) => el('th', { textContent: t })))])]);
   const body = el('tbody'); table.append(body);
   const answered = new Set(cache.answers.map((a) => a.scan_id));
   shown.slice(0, 500).forEach((r) => {
@@ -193,6 +214,8 @@ function drawData() {
       el('td', { textContent: r.storeLabel }),
       el('td', {}, [el('span', { className: 'chip ' + (r.result === 'success' ? 'ok' : 'bad'), textContent: r.result === 'success' ? 'Success' : 'Failed' }), r.failure_reason ? el('div', { className: 'small muted', textContent: r.failure_reason }) : '']),
       el('td', { textContent: s ? stageName(s.stage) : 'None' }),
+      el('td', { textContent: planLabel((s && s.eating_time) || r.eating_time) }),
+      el('td', { textContent: s && s.match_category ? EATING.categories[s.match_category] : 'None' }),
       photoCell,
       el('td', { textContent: !s || s.shopper_match === null ? 'None' : s.shopper_match ? 'Agreed' : 'Said stage ' + (s.shopper_stage || '?') }),
       el('td', { textContent: [d.phone_model, d.os, d.browser].filter(Boolean).join(' · ') }),
@@ -200,7 +223,7 @@ function drawData() {
       el('td', { textContent: s && s.saved ? 'Yes' : 'No' }),
       el('td', { textContent: s && answered.has(s.id) ? 'Done' : 'None' })]));
   });
-  if (!shown.length) body.append(el('tr', {}, [el('td', { colSpan: 11, className: 'muted', textContent: 'No scans match.' })]));
+  if (!shown.length) body.append(el('tr', {}, [el('td', { colSpan: 13, className: 'muted', textContent: 'No scans match.' })]));
   view.append(el('div', { className: 'card stack' }, [
     el('div', { className: 'q-head' }, [el('h2', { textContent: 'Scan log' }), el('div', { className: 'tools' }, [logFilter('all', 'All attempts'), logFilter('saved', 'Saved only'), logFilter('failed', 'Failed only'), exp, del])]),
     el('p', { className: 'small muted', textContent: 'Photos are deleted automatically after 120 to 150 days. Records stay until you delete them here.' + (shown.length > 500 ? ' Showing the newest 500 of ' + shown.length + '; the export has all of them.' : '') }),
@@ -236,12 +259,13 @@ async function openPhoto(path) {
 function exportCsv(rows) {
   const answered = new Set(cache.answers.map((a) => a.scan_id));
   const head = ['phone_date_time', 'phone_timezone', 'server_time_utc', 'attempt_id', 'scan_id', 'store', 'result', 'failure_reason', 'stage', 'stage_name',
-    'saved', 'shopper_check', 'shopper_stage', 'confidence', 'hue', 'phone_model', 'system', 'browser', 'registered', 'try_anyway', 'survey_done', 'photo_paths'];
+    'eating_plan', 'plan_match', 'session_id', 'saved', 'shopper_check', 'shopper_stage', 'confidence', 'hue', 'phone_model', 'system', 'browser', 'registered', 'try_anyway', 'survey_done', 'photo_paths'];
   const cell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
   const lines = [head.join(',')].concat(rows.map((r) => {
     const s = r.scan || {}; const d = r.devices || {}; const cv = s.color_values || {};
     const st = STAGES.find((x) => x.num === s.stage);
     return [fmt(r.phone_time || r.created_at, r.phone_timezone), r.phone_timezone, r.created_at, r.id, s.id, r.storeLabel, r.result, r.failure_reason, s.stage, st ? st.name : '',
+      s.eating_time || r.eating_time, s.match_category, r.session_id,
       s.id ? (s.saved ? 'yes' : 'no') : '', s.shopper_match === null || s.shopper_match === undefined ? '' : s.shopper_match ? 'agreed' : 'disagreed', s.shopper_stage, cv.confidence, cv.hue,
       d.phone_model, d.os, d.browser, r.shopper_id ? 'yes' : 'no', r.try_anyway ? 'yes' : 'no', s.id && answered.has(s.id) ? 'yes' : 'no',
       (s.scan_photos || []).filter((p) => !p.photo_deleted_at).map((p) => p.storage_path).join(' ')].map(cell).join(',');

@@ -21,6 +21,33 @@ export const SESSION_MS = 5 * 60 * 1000;
 // based on a typical bunch size and a typical phone lens.
 export const DISTANCE = { minIn: 12, maxIn: 24, bananaIn: 8, fovDeg: 60, everyMs: 300 };
 
+// "Ready When You Are": matching the scanned stage to when the shopper wants to eat.
+// This is a rules layer on top of the color reader. Change it here without touching the reader.
+// These are shopping suggestions, never promised ripening times.
+export const EATING = {
+  options: [
+    { key: 'today', label: 'Today', line: "I'm ready to enjoy them now.", plan: 'Eat today' },
+    { key: 'tomorrow', label: 'Tomorrow', line: 'I want them ready soon.', plan: 'Eat tomorrow' },
+    { key: '2_3_days', label: 'In 2–3 Days', line: "I'm planning ahead.", plan: 'Eat in 2–3 days' },
+    { key: 'later_this_week', label: 'Later This Week', line: 'I want them to last longer.', plan: 'Eat later this week' },
+  ],
+  // which stages (1 to 4) are a good match for each timeframe
+  good: { today: [3, 4], tomorrow: [2, 3], '2_3_days': [1, 2], later_this_week: [1] },
+  categories: { good_match: 'Good Match', ready_earlier: 'May Be Ready Earlier', needs_more_time: 'May Need More Time' },
+  explain: {
+    good_match: {
+      today: 'These bananas look right for eating today.',
+      tomorrow: 'These bananas look right for eating about tomorrow.',
+      '2_3_days': 'These bananas may become more yellow over the next few days.',
+      later_this_week: 'Greener bananas like these usually keep the longest.',
+    },
+    ready_earlier: 'These bananas are further along than your plan. They may be ready before you want them. A greener bunch may suit you better.',
+    needs_more_time: 'These bananas are greener than your plan. They may need more time before they are how you like them. A more yellow bunch may suit you better.',
+    softer: 'Spotty bananas are soft and sweet. They suit shoppers who like a softer banana today.',
+    always: 'Actual ripening depends on storage conditions.',
+  },
+};
+
 // Reader defaults. The admin page can change these per stage (Reference pictures tab).
 export const READER = {
   chartWeight: 2,      // the built-in chart color counts like this many staff pictures when blending
