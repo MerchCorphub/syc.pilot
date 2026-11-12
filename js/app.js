@@ -1,7 +1,7 @@
 // Scan Your Color pilot: shopper app
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN, SESSION_MS } from './config.js';
-import { REFS, readSource, matchStage, knnMatch, knnReady } from './reader.js';
+import { SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, READER_VERSION, STAGES, SCAN, SESSION_MS, DISTANCE } from './config.js';
+import { REFS, readSource, matchStage, knnMatch, knnReady, estimateDistance } from './reader.js';
 
 // Shoppers are never signed in; keep this client separate from any admin session.
 const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -213,8 +213,27 @@ const matchNow = (r) => (learned() ? knnMatch(r, lib.samples, SCAN.knnK) : match
 const video = $('video');
 let stream = null, scanning = false, timer = null, tryAnyway = false, cameraFailLogged = false, weak = null, torchOn = false;
 
+// ---- distance guide: keep the phone 12 to 24 inches from the bananas ----
+let distTimer = null, distIn = null;
+function distanceOf(source, w, h) {
+  try { return estimateDistance(source, w, h, DISTANCE); } catch (e) { return { ok: false }; }
+}
+function showDistance(d) {
+  const box = $('dist'); box.hidden = false;
+  if (!d || !d.ok) { distIn = null; box.className = 'dist'; box.textContent = 'Point the camera at the bananas'; return; }
+  distIn = distIn === null ? d.inches : distIn * 0.6 + d.inches * 0.4;      // steady the number
+  const inches = Math.round(distIn);
+  if (d.fills || distIn < DISTANCE.minIn) { box.className = 'dist move'; box.textContent = (d.fills ? 'Too close' : 'About ' + inches + ' in') + '. Move back.'; }
+  else if (distIn > DISTANCE.maxIn) { box.className = 'dist move'; box.textContent = 'About ' + inches + ' in. Move closer.'; }
+  else { box.className = 'dist good'; box.textContent = 'About ' + inches + ' in. Good distance.'; }
+}
+function startDistance() {
+  clearInterval(distTimer); distIn = null;
+  distTimer = setInterval(() => { if (stream && video.videoWidth) showDistance(distanceOf(video, video.videoWidth, video.videoHeight)); }, DISTANCE.everyMs);
+}
+
 function stopCamera() {
-  scanning = false; clearTimeout(timer);
+  scanning = false; clearTimeout(timer); clearInterval(distTimer); distIn = null; $('dist').hidden = true;
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   video.srcObject = null; torchOn = false;
 }
@@ -254,6 +273,7 @@ async function startCamera() {
     await video.play();
     $('cam-msg').textContent = 'Camera ready. Tap Scan now.';
     $('scan-now').disabled = false;
+    startDistance();
     try {
       const track = stream.getVideoTracks()[0];
       const caps = track.getCapabilities ? track.getCapabilities() : {};
@@ -323,7 +343,8 @@ const lightTip = (light) => {
   const k = light && light.klass;
   if (k === 'too dark') return 'It is too dark here. Move toward more light' + ($('torch').hidden ? '' : ' or turn on the light') + ', then try again.';
   if (k === 'glare') return 'There is too much glare. Tilt the phone a little, then try again.';
-  return 'Move closer so the bananas fill the box, then try again.';
+  if (distIn !== null && distIn < DISTANCE.minIn) return 'You are too close. Move back to 12 to 24 inches, then try again.';
+  return 'Move closer, to 12 to 24 inches, so the bananas fill the box, then try again.';
 };
 
 $('scan-now').addEventListener('click', runScan);
@@ -388,7 +409,8 @@ async function failScan(reason, light) {
   $('scan-now').disabled = !stream;
 }
 
-async function finishScan(pick, photos, readings, how) {
+async function finishScan(pick, photos, readings, how, photoDistance) {
+  const dist = photoDistance !== undefined ? photoDistance : distIn;
   try {
     $('cam-msg').textContent = 'Saving your scan…';
     const stage = STAGES.find((s) => s.key === pick.m.key);
@@ -409,6 +431,8 @@ async function finishScan(pick, photos, readings, how) {
         decided: how, locked: how === 'locked', method: usedLearned ? 'learned' : 'chart',
         votes: usedLearned ? pick.m.votes : null, neighbours: usedLearned ? pick.m.k : null,
         library_staff: lib ? lib.staff : 0, library_shopper: lib ? lib.shopper : 0,
+        distance_in: dist === null || dist === undefined ? null : Math.round(dist),
+        distance_ok: dist === null || dist === undefined ? null : dist >= DISTANCE.minIn && dist <= DISTANCE.maxIn,
         readings: readings.length, hue_min: r1(Math.min(...hues)), hue_max: r1(Math.max(...hues)),
         light: { cct: r1(light.cct), klass: light.klass || null, conf: r1(light.conf) },
       },
@@ -437,10 +461,11 @@ $('photo-file').addEventListener('change', async (e) => {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
     const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
     const still = readStill(img, w, h);
+    const pd = distanceOf(img, w, h);
     const photo = toJpeg(img, w, h);
     URL.revokeObjectURL(url);
     if (!still.sm) return failScan('photo_no_banana_found', still.light);
-    finishScan({ sm: still.sm, m: still.m }, [photo], [], 'photo');
+    finishScan({ sm: still.sm, m: still.m }, [photo], [], 'photo', pd.ok ? pd.inches : null);
   } catch (err) { failScan('photo_unreadable', null); }
 });
 
