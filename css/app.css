@@ -140,3 +140,5 @@ td .acts { min-width: 150px; }
   .wrap { padding: 0; max-width: none; } .card { break-inside: avoid; } body { background: #fff; }
   body.print-invoice .be { display: none; } body.print-invoice #print-area { display: block; padding: 24px; font-size: 14px; }
 }
+
+.hero { display: block; width: 150px; height: 150px; margin: 0 auto; border-radius: 28px; }
