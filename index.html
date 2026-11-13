@@ -38,7 +38,7 @@
 
   <!-- 2 Register -->
   <section data-screen="register" hidden>
-    <header class="bar"><button class="back" data-go="welcome">Back</button><div class="brand">My Banana</div><span class="step">Step 1 of 6</span></header>
+    <header class="bar"><button class="back" data-go="welcome">Back</button><div class="brand">My Banana</div><span class="step">Step 1 of 7</span></header>
     <div class="body">
       <h1>Register your scans</h1>
       <p>Registering is optional. It tells us who is using the scan during the pilot.</p>
@@ -55,7 +55,7 @@
 
   <!-- 3 Store -->
   <section data-screen="store" hidden>
-    <header class="bar"><button class="back" data-go="register">Back</button><div class="brand">My Banana</div><span class="step">Step 2 of 6</span></header>
+    <header class="bar"><button class="back" data-go="register">Back</button><div class="brand">My Banana</div><span class="step">Step 2 of 7</span></header>
     <div class="body">
       <h1>Which store are you at?</h1>
       <div class="field" id="store-search-wrap"><label class="label" for="store-search">Find your store</label><input id="store-search" type="search" placeholder="Store name, city or ZIP"></div>
@@ -66,9 +66,24 @@
     <div class="foot"><button class="btn primary" id="store-next">Continue</button></div>
   </section>
 
+  <!-- Brand selection (optional) -->
+  <section data-screen="brand" hidden>
+    <header class="bar"><button class="back" data-go="store">Back</button><div class="brand">My Banana</div><span class="step">Step 3 of 7</span></header>
+    <div class="body">
+      <h1>Which banana brand are you shopping for?</h1>
+      <p>This step is optional. It lets us show tips for the brand you are buying.</p>
+      <div class="field"><label class="label" for="brand-search">Find a brand</label><input id="brand-search" type="search" placeholder="Brand name"></div>
+      <fieldset><legend class="label">Brands</legend><div class="opts" id="brand-list"></div></fieldset>
+    </div>
+    <div class="foot">
+      <button class="btn primary" id="brand-next" disabled>Continue</button>
+      <button class="btn link small" id="brand-skip">Skip this step</button>
+    </div>
+  </section>
+
   <!-- Ready When You Are -->
   <section data-screen="eat" hidden>
-    <header class="bar"><button class="back" id="eat-back">Back</button><div class="brand">My Banana</div><span class="step">Step 3 of 6</span></header>
+    <header class="bar"><button class="back" id="eat-back">Back</button><div class="brand">My Banana</div><span class="step">Step 4 of 7</span></header>
     <div class="body">
       <h1>When do you want to eat your bananas?</h1>
       <p>We'll help you choose the right ripeness for your plans.</p>
@@ -79,7 +94,7 @@
 
   <!-- 4 Scan -->
   <section data-screen="scan" hidden>
-    <header class="bar"><button class="back" data-go="eat">Back</button><div class="brand">My Banana</div><span class="step">Step 4 of 6</span></header>
+    <header class="bar"><button class="back" data-go="eat">Back</button><div class="brand">My Banana</div><span class="step">Step 5 of 7</span></header>
     <div class="body">
       <div class="note warn" id="cam-warning" hidden>
         <p><strong>Warning: this phone's camera may not scan well.</strong></p>
@@ -109,7 +124,7 @@
 
   <!-- 5 Result -->
   <section data-screen="result" hidden>
-    <header class="bar"><button class="back" data-go="scan">Back</button><div class="brand">My Banana</div><span class="step">Step 5 of 6</span></header>
+    <header class="bar"><button class="back" data-go="scan">Back</button><div class="brand">My Banana</div><span class="step">Step 6 of 7</span></header>
     <div class="body">
       <div class="label">Your color today</div>
       <div class="card result"><div class="swatch" id="res-swatch"></div><div><div class="stage-num" id="res-num"></div><div id="res-name"></div><div class="small muted" id="res-desc"></div></div></div>
@@ -125,6 +140,12 @@
         <div><span class="label">Good for</span><div id="res-uses"></div></div>
         <p class="small muted" id="res-match"></p>
         <p class="small muted" id="res-agree" hidden></p>
+      </div>
+      <div class="card stack" id="res-edu">
+        <div class="q-head"><h2 id="res-edu-title">Banana tips</h2><span class="chip brass" id="res-edu-chip" hidden>Sponsored</span></div>
+        <p class="small muted" id="res-edu-note" hidden></p>
+        <div id="res-edu-body" class="stack"></div>
+        <button class="btn small" id="learn-more">Learn More</button>
       </div>
       <p class="small muted">This is the color measured from your pictures today. The match with your plan is a shopping suggestion, not a promise of when the bananas will be ready.</p>
       <fieldset class="card">
@@ -146,9 +167,23 @@
     </div>
   </section>
 
+  <!-- Brand education -->
+  <section data-screen="learn" hidden>
+    <header class="bar"><button class="back" data-go="result">Back</button><div class="brand">My Banana</div><span></span></header>
+    <div class="body">
+      <div class="q-head"><h1 id="learn-title">Banana tips</h1><span class="chip brass" id="learn-chip" hidden>Sponsored</span></div>
+      <p class="small muted" id="learn-note" hidden></p>
+      <div id="learn-body" class="stack"></div>
+    </div>
+    <div class="foot">
+      <button class="btn primary" id="learn-scan">Scan Another Bunch</button>
+      <button class="btn" data-go="result">Back to my result</button>
+    </div>
+  </section>
+
   <!-- 6 Survey -->
   <section data-screen="survey" hidden>
-    <header class="bar"><span></span><div class="brand">My Banana</div><span class="step">Step 6 of 6</span></header>
+    <header class="bar"><span></span><div class="brand">My Banana</div><span class="step">Step 7 of 7</span></header>
     <div class="body">
       <h1 id="survey-title">Scan saved. A few quick questions</h1>
       <div id="survey-form" class="stack"></div>

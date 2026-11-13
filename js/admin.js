@@ -59,7 +59,7 @@ document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click
 function openTab(tab) {
   document.querySelectorAll('[data-tab]').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   view.textContent = '';
-  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab })[tab]();
+  ({ data: dataTab, survey: surveyTab, library: libraryTab, brands: brandsTab, stores: storesTab })[tab]();
 }
 
 // ---------- pilot data ----------
@@ -72,23 +72,26 @@ async function loadData() {
   if (filters.range === 'today') { from = new Date(); from.setHours(0, 0, 0, 0); }
   let q = db.from('scan_attempts').select(
     'id,created_at,phone_time,phone_timezone,result,failure_reason,try_anyway,device_id,shopper_id,store_id,store_name_typed,session_id,eating_time,' +
-    'devices(phone_model,os,browser),stores(name),' +
+    'devices(phone_model,os,browser),stores(name),brands(name),' +
     'scans(id,stage,saved,shopper_match,shopper_stage,reader_version,color_values,eating_time,match_category,scan_photos(id,storage_path,photo_deleted_at))'
   ).order('created_at', { ascending: false }).limit(5000);
   let a = db.from('survey_answers').select('id,question_id,question_text_asked,answer,scan_id,created_at').order('created_at', { ascending: false }).limit(10000);
   if (from) { q = q.gte('created_at', from.toISOString()); a = a.gte('created_at', from.toISOString()); }
-  const [att, ans, shop, stores, weak] = await Promise.all([
+  let ev = db.from('engagement_events').select('event,brand_id,sponsored,created_at').order('created_at', { ascending: false }).limit(20000);
+  if (from) ev = ev.gte('created_at', from.toISOString());
+  const [att, ans, shop, stores, weak, events] = await Promise.all([
     q, a,
     db.from('shoppers').select('id', { count: 'exact', head: true }),
     db.from('stores').select('id,name').order('name'),
     db.from('weak_camera_phones').select('phone_model'),
+    ev,
   ]);
   if (att.error) throw att.error;
   const rows = (att.data || []).map((r) => Object.assign(r, {
     scan: Array.isArray(r.scans) ? r.scans[0] || null : r.scans || null,
     storeLabel: (r.stores && r.stores.name) || r.store_name_typed || 'Not given',
   }));
-  cache = { rows, answers: ans.data || [], shoppers: shop.count || 0, stores: stores.data || [], weak: (weak.data || []).map((x) => x.phone_model) };
+  cache = { rows, events: events.data || [], answers: ans.data || [], shoppers: shop.count || 0, stores: stores.data || [], weak: (weak.data || []).map((x) => x.phone_model) };
 }
 
 async function dataTab() {
@@ -162,6 +165,17 @@ function drawData() {
       mini('Scans per shopping session', sessCounts.length ? (sessCounts.reduce((t, n) => t + n, 0) / sessCounts.length).toFixed(1) : 'None yet')]),
     planBars]));
 
+  // brands picked and brand education engagement
+  const brandCounts = {};
+  rows.forEach((r) => { const n = (r.brands && r.brands.name) || 'No brand chosen'; brandCounts[n] = (brandCounts[n] || 0) + 1; });
+  const brandBars = el('div', { className: 'bars' });
+  Object.keys(brandCounts).sort((x, y) => brandCounts[y] - brandCounts[x]).forEach((n) => brandBars.append(el('div', { textContent: n }), el('div', { className: 'track' }, [el('div', { style: 'width:' + pct(brandCounts[n], rows.length) })]), el('div', { className: 'val', textContent: brandCounts[n] + ' · ' + pct(brandCounts[n], rows.length) })));
+  const evCount = (name) => cache.events.filter((e) => e.event === name).length;
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Brands and brand education' }),
+    el('div', { className: 'tiles' }, [mini('Brand picked', evCount('brand_selected')), mini('Brand step skipped', evCount('brand_skipped')), mini('Tips shown on results', evCount('education_shown')), mini('Learn More opened', evCount('learn_more_opened')), mini('Brand website opened', evCount('website_opened'))]),
+    el('p', { className: 'small muted', textContent: 'Scan attempts by brand' + (filters.store === 'all' ? '' : ' for this store') + '. The five counts above are anonymous events for all stores in the date range.' }),
+    rows.length ? brandBars : el('p', { className: 'muted', textContent: 'No scans yet.' })]));
+
   // stage spread + phones
   const bars = el('div', { className: 'bars' });
   STAGES.forEach((s) => {
@@ -199,7 +213,7 @@ function drawData() {
   const shown = logRows(rows);
   const exp = el('button', { className: 'btn primary small', textContent: 'Export scan log (CSV)' }); exp.addEventListener('click', () => exportCsv(shown));
   const del = el('button', { className: 'btn danger small', textContent: 'Delete selected' }); del.addEventListener('click', () => deleteSelected());
-  const table = el('table', { style: 'min-width:1400px' }, [el('thead', {}, [el('tr', {}, ['Select', 'Phone date · time', 'Store', 'Result', 'Stage', 'Eating plan', 'Plan match', 'Photo', 'Shopper check', 'Phone', 'Shopper', 'Saved', 'Survey'].map((t) => el('th', { textContent: t })))])]);
+  const table = el('table', { style: 'min-width:1400px' }, [el('thead', {}, [el('tr', {}, ['Select', 'Phone date · time', 'Store', 'Result', 'Stage', 'Brand', 'Eating plan', 'Plan match', 'Photo', 'Shopper check', 'Phone', 'Shopper', 'Saved', 'Survey'].map((t) => el('th', { textContent: t })))])]);
   const body = el('tbody'); table.append(body);
   const answered = new Set(cache.answers.map((a) => a.scan_id));
   shown.slice(0, 500).forEach((r) => {
@@ -214,6 +228,7 @@ function drawData() {
       el('td', { textContent: r.storeLabel }),
       el('td', {}, [el('span', { className: 'chip ' + (r.result === 'success' ? 'ok' : 'bad'), textContent: r.result === 'success' ? 'Success' : 'Failed' }), r.failure_reason ? el('div', { className: 'small muted', textContent: r.failure_reason }) : '']),
       el('td', { textContent: s ? stageName(s.stage) : 'None' }),
+      el('td', { textContent: (r.brands && r.brands.name) || 'None' }),
       el('td', { textContent: planLabel((s && s.eating_time) || r.eating_time) }),
       el('td', { textContent: s && s.match_category ? EATING.categories[s.match_category] : 'None' }),
       photoCell,
@@ -223,7 +238,7 @@ function drawData() {
       el('td', { textContent: s && s.saved ? 'Yes' : 'No' }),
       el('td', { textContent: s && answered.has(s.id) ? 'Done' : 'None' })]));
   });
-  if (!shown.length) body.append(el('tr', {}, [el('td', { colSpan: 13, className: 'muted', textContent: 'No scans match.' })]));
+  if (!shown.length) body.append(el('tr', {}, [el('td', { colSpan: 14, className: 'muted', textContent: 'No scans match.' })]));
   view.append(el('div', { className: 'card stack' }, [
     el('div', { className: 'q-head' }, [el('h2', { textContent: 'Scan log' }), el('div', { className: 'tools' }, [logFilter('all', 'All attempts'), logFilter('saved', 'Saved only'), logFilter('failed', 'Failed only'), exp, del])]),
     el('p', { className: 'small muted', textContent: 'Photos are deleted automatically after 120 to 150 days. Records stay until you delete them here.' + (shown.length > 500 ? ' Showing the newest 500 of ' + shown.length + '; the export has all of them.' : '') }),
@@ -259,13 +274,13 @@ async function openPhoto(path) {
 function exportCsv(rows) {
   const answered = new Set(cache.answers.map((a) => a.scan_id));
   const head = ['phone_date_time', 'phone_timezone', 'server_time_utc', 'attempt_id', 'scan_id', 'store', 'result', 'failure_reason', 'stage', 'stage_name',
-    'eating_plan', 'plan_match', 'session_id', 'saved', 'shopper_check', 'shopper_stage', 'confidence', 'hue', 'phone_model', 'system', 'browser', 'registered', 'try_anyway', 'survey_done', 'photo_paths'];
+    'brand', 'eating_plan', 'plan_match', 'session_id', 'saved', 'shopper_check', 'shopper_stage', 'confidence', 'hue', 'phone_model', 'system', 'browser', 'registered', 'try_anyway', 'survey_done', 'photo_paths'];
   const cell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
   const lines = [head.join(',')].concat(rows.map((r) => {
     const s = r.scan || {}; const d = r.devices || {}; const cv = s.color_values || {};
     const st = STAGES.find((x) => x.num === s.stage);
     return [fmt(r.phone_time || r.created_at, r.phone_timezone), r.phone_timezone, r.created_at, r.id, s.id, r.storeLabel, r.result, r.failure_reason, s.stage, st ? st.name : '',
-      s.eating_time || r.eating_time, s.match_category, r.session_id,
+      r.brands ? r.brands.name : '', s.eating_time || r.eating_time, s.match_category, r.session_id,
       s.id ? (s.saved ? 'yes' : 'no') : '', s.shopper_match === null || s.shopper_match === undefined ? '' : s.shopper_match ? 'agreed' : 'disagreed', s.shopper_stage, cv.confidence, cv.hue,
       d.phone_model, d.os, d.browser, r.shopper_id ? 'yes' : 'no', r.try_anyway ? 'yes' : 'no', s.id && answered.has(s.id) ? 'yes' : 'no',
       (s.scan_photos || []).filter((p) => !p.photo_deleted_at).map((p) => p.storage_path).join(' ')].map(cell).join(',');
@@ -502,6 +517,77 @@ async function addSamples(stage, input) {
   }
   toast(ok + ' of ' + files.length + ' added to ' + stage.name + (ok < files.length ? '. The rest had no clear banana in the picture.' : '.'), ok > 0);
   view.textContent = ''; libraryTab();
+}
+
+// ---------- brands and brand education content ----------
+const CONTENT_KINDS = [['overview', 'Brand overview'], ['ripeness', 'Ripeness education'], ['storage', 'Storage recommendation'], ['recipe', 'Recipe'], ['video', 'Educational video'], ['waste', 'Food waste tip'], ['website', 'Official website link']];
+async function brandsTab() {
+  view.append(el('p', { className: 'muted', textContent: 'Loading brands…' }));
+  const [b, c] = await Promise.all([db.from('brands').select('*').order('sort'), db.from('brand_content').select('*').order('sort')]);
+  view.textContent = '';
+  if (b.error || c.error) { view.append(el('div', { className: 'note err', textContent: 'Could not load brands.' })); return; }
+  const brands = b.data || [], content = c.data || [];
+  const reload = () => { view.textContent = ''; brandsTab(); };
+  view.append(el('div', { className: 'stack' }, [el('h1', { textContent: 'Brands and education content' }),
+    el('p', { className: 'muted', textContent: 'Shoppers can pick a brand before they scan. A brand shows its own content only when it is marked Sponsored and has approved content; every other brand shows My Banana\'s general tips. Sponsorship never changes the color reading or the plan match. Brand names are shown as text only, with no logos.' })]));
+
+  // brand directory
+  const bt = el('table', {}, [el('thead', {}, [el('tr', {}, ['Brand', 'Shown to shoppers', 'Sponsored', 'Approved content', 'Draft content', ''].map((t) => el('th', { textContent: t })))])]);
+  const bb = el('tbody'); bt.append(bb);
+  brands.forEach((br) => {
+    const flag = (key, label) => { const i = el('input', { type: 'checkbox', checked: !!br[key], ariaLabel: label + ' ' + br.name }); i.addEventListener('change', async () => { const { error } = await db.from('brands').update({ [key]: i.checked }).eq('id', br.id); if (error) { i.checked = !i.checked; toast('Could not change the brand.'); } }); return i; };
+    const mine = content.filter((x) => x.brand_id === br.id);
+    const del = el('button', { className: 'btn danger small', textContent: 'Delete' });
+    del.addEventListener('click', async () => { if (!window.confirm('Delete ' + br.name + ' and its content? Scans already taken keep their data but lose the brand name. To keep the name, untick "Shown to shoppers" instead.')) return; const { error } = await db.from('brands').delete().eq('id', br.id); if (error) return toast('Could not delete the brand.'); reload(); });
+    bb.append(el('tr', {}, [el('td', { textContent: br.name }), el('td', {}, [flag('active', 'Show')]), el('td', {}, [flag('sponsored', 'Sponsored')]),
+      el('td', { textContent: mine.filter((x) => x.approval_status === 'approved').length }), el('td', { textContent: mine.filter((x) => x.approval_status !== 'approved').length }), el('td', {}, [del])]));
+  });
+  const newName = el('input', { type: 'text', id: 'b-name', maxLength: 80, placeholder: 'Brand name' });
+  const addB = el('button', { className: 'btn primary', textContent: 'Add brand' });
+  addB.addEventListener('click', async () => { if (!newName.value.trim()) return toast('The brand needs a name.'); const { error } = await db.from('brands').insert({ name: newName.value.trim(), sort: brands.length + 1 }); if (error) return toast('Could not add the brand. Is the name already used?'); reload(); });
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Brand directory' }), el('div', { className: 'scroll' }, [bt]),
+    el('div', { className: 'grid-form' }, [el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'b-name', textContent: 'New brand' }), newName]), addB])]));
+
+  // add content
+  const f = {
+    brand: el('select', { id: 'c-brand' }, [el('option', { value: '', textContent: 'My Banana (general tips)' })].concat(brands.map((br) => el('option', { value: br.id, textContent: br.name })))),
+    kind: el('select', { id: 'c-kind' }, CONTENT_KINDS.map(([v, t]) => el('option', { value: v, textContent: t }))),
+    stage: el('select', { id: 'c-stage' }, [el('option', { value: '', textContent: 'All stages' })].concat(STAGES.map((x) => el('option', { value: x.num, textContent: 'Stage ' + x.num + ': ' + x.name })))),
+    title: el('input', { type: 'text', id: 'c-title', maxLength: 120 }),
+    body: el('textarea', { id: 'c-body', rows: 3, maxLength: 1200 }),
+    url: el('input', { type: 'text', id: 'c-url', maxLength: 300, placeholder: 'https://' }),
+  };
+  const fld = (label, input) => el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: input.id, textContent: label }), input]);
+  const addC = el('button', { className: 'btn primary', textContent: 'Add as draft' });
+  addC.addEventListener('click', async () => {
+    const url = f.url.value.trim();
+    if (!f.title.value.trim()) return toast('The content needs a title.');
+    if (url && !/^https:\/\//i.test(url)) return toast('Links must start with https://');
+    const { error } = await db.from('brand_content').insert({ brand_id: f.brand.value || null, kind: f.kind.value, stage: f.stage.value ? Number(f.stage.value) : null, title: f.title.value.trim(), body: f.body.value.trim() || null, url: url || null, sort: content.length + 1 });
+    if (error) return toast('Could not add the content.');
+    reload();
+  });
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Add education content' }),
+    el('p', { className: 'small muted', textContent: 'New content is saved as a draft. Shoppers see it only after you approve it. Add brand content only when the brand has approved the material.' }),
+    el('div', { className: 'grid-form' }, [fld('For', f.brand), fld('Type', f.kind), fld('Stage (ripeness only)', f.stage), fld('Title', f.title)]),
+    fld('Text', f.body), fld('Link (videos and websites)', f.url), addC]));
+
+  // content list
+  const ct = el('table', { style: 'min-width:900px' }, [el('thead', {}, [el('tr', {}, ['For', 'Type', 'Title', 'Text', 'Status', '', ''].map((t) => el('th', { textContent: t })))])]);
+  const cb = el('tbody'); ct.append(cb);
+  content.forEach((x) => {
+    const br = brands.find((y) => y.id === x.brand_id);
+    const ok = x.approval_status === 'approved';
+    const tog = el('button', { className: 'btn small', textContent: ok ? 'Move to draft' : 'Approve' });
+    tog.addEventListener('click', async () => { const { error } = await db.from('brand_content').update({ approval_status: ok ? 'draft' : 'approved', updated_at: new Date().toISOString() }).eq('id', x.id); if (error) return toast('Could not change the status.'); reload(); });
+    const del = el('button', { className: 'btn danger small', textContent: 'Delete' });
+    del.addEventListener('click', async () => { if (!window.confirm('Delete "' + x.title + '"?')) return; const { error } = await db.from('brand_content').delete().eq('id', x.id); if (error) return toast('Could not delete the content.'); reload(); });
+    cb.append(el('tr', {}, [el('td', { textContent: br ? br.name : 'My Banana (general)' }), el('td', { textContent: (CONTENT_KINDS.find((k) => k[0] === x.kind) || [0, x.kind])[1] + (x.stage ? ' · Stage ' + x.stage : '') }),
+      el('td', { textContent: x.title }), el('td', { className: 'small', textContent: (x.body || '') + (x.url ? ' ' + x.url : '') }),
+      el('td', {}, [el('span', { className: 'chip ' + (ok ? 'ok' : 'brass'), textContent: ok ? 'Approved' : 'Draft' })]), el('td', {}, [tog]), el('td', {}, [del])]));
+  });
+  if (!content.length) cb.append(el('tr', {}, [el('td', { colSpan: 7, className: 'muted', textContent: 'No content yet.' })]));
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Education content' }), el('div', { className: 'scroll' }, [ct])]));
 }
 
 // ---------- stores ----------
