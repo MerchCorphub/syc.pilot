@@ -88,13 +88,14 @@ let justSaved = false;
 // ---- session: 5 minutes from when the app opens ----
 let sessionStart = Date.now(), sessionId = uuid(), sessionSurveyDone = false, sessionNote = '';
 const expired = () => !!sessionStart && Date.now() - sessionStart >= SESSION_MS;
-function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionSurveyDone = false; sessionNote = ''; eatTime = null; }
+function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionSurveyDone = false; sessionNote = ''; eatTime = null; brand = null; }
 function endSession(note) {
   stopCamera();
-  sessionStart = null; sessionSurveyDone = false; current = null; sessionNote = note || ''; eatTime = null;
+  sessionStart = null; sessionSurveyDone = false; current = null; sessionNote = note || ''; eatTime = null; brand = null;
   go('welcome');
 }
-const STARTS_WORK = ['register', 'store', 'eat', 'scan'];
+const STARTS_WORK = ['register', 'store', 'brand', 'eat', 'scan'];
+let brand = null;           // the brand picked for this session (optional): { id, name, sponsored } or null
 
 // ---- Ready When You Are: the shopper's eating plan, kept for this session only ----
 let eatTime = null;         // desiredEatingTime: today | tomorrow | 2_3_days | later_this_week
@@ -116,7 +117,9 @@ function go(name) {
   if (name !== 'scan') stopCamera();
   if (name === 'welcome') { $('welcome-saved').hidden = !state.scans.length; $('session-note').textContent = sessionNote; $('session-note').hidden = !sessionNote; sessionNote = ''; }
   if (name === 'store') showStores();
+  if (name === 'brand') showBrands();
   if (name === 'eat') showEat();
+  if (name === 'learn') showLearn();
   if (name === 'scan') startScanScreen();
   if (name === 'survey') showSurvey();
   if (name === 'saved') showSaved();
@@ -129,7 +132,7 @@ document.addEventListener('click', (e) => {
 setInterval(() => {
   if (!expired()) return;
   if (screen === 'welcome' || screen === 'install' || screen === 'bye') sessionStart = null;
-  else if (screen === 'register' || screen === 'store' || (screen === 'eat' && !eatReturn)) endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
+  else if (screen === 'register' || screen === 'store' || screen === 'brand' || (screen === 'eat' && !eatReturn)) endSession('Your 5-minute session has ended. Tap Start scan to begin a new one.');
   // on the scan, result, survey and saved screens the shopper finishes what they are on first
 }, 5000);
 
@@ -194,7 +197,7 @@ $('store-next').addEventListener('click', () => {
   }
   save();
   eatReturn = false;
-  go('eat');
+  go('brand');
 });
 
 // ---- reference library (what the reader has learned) ----
@@ -219,6 +222,115 @@ const NO_LIB = { samples: [], settings: {}, eff: effectiveRefs([], {}) };
 const matchNow = (r, profile) => classify(r, profile, lib || NO_LIB);
 const profileOf = (source, w, h, still) => { try { return peelProfile(source, w, h, still); } catch (e) { return null; } };
 
+// ---- brand selection (optional) and brand education ----
+// Sponsorship only changes which tips are shown. It never touches the color reading or the plan match.
+let brands = null;
+const eduCache = {};
+function logEvent(event, extra) {
+  db.from('engagement_events').insert(Object.assign({
+    session_id: sessionId, store_id: state.store ? state.store.id : null, brand_id: brand ? brand.id : null, event,
+  }, extra || {})).then(() => {}, () => {});
+}
+async function showBrands() {
+  const list = $('brand-list');
+  if (!brands) {
+    list.textContent = 'Loading brands…';
+    const { data, error } = await db.from('brands').select('id,name,kind,sponsored').eq('active', true).order('sort');
+    brands = error ? [] : (data || []);
+  }
+  $('brand-search').value = '';
+  drawBrands();
+}
+function drawBrands() {
+  const q = $('brand-search').value.trim().toLowerCase();
+  const list = $('brand-list'); list.textContent = '';
+  const shown = brands.filter((b) => !q || b.name.toLowerCase().includes(q));
+  shown.forEach((b) => {
+    const input = el('input', { type: 'radio', name: 'brandpick', value: b.id, checked: !!brand && brand.id === b.id });
+    list.append(el('label', { className: 'opt' }, [input, el('strong', { textContent: b.name })]));
+  });
+  if (!brands.length) list.append(el('p', { className: 'muted', textContent: 'The brand list is not available right now. You can skip this step.' }));
+  else if (!shown.length) list.append(el('p', { className: 'muted', textContent: 'No brand matches. Try another name, or skip this step.' }));
+  $('brand-next').disabled = !document.querySelector('input[name=brandpick]:checked');
+}
+$('brand-search').addEventListener('input', drawBrands);
+$('brand-list').addEventListener('change', () => { $('brand-next').disabled = !document.querySelector('input[name=brandpick]:checked'); });
+$('brand-next').addEventListener('click', () => {
+  const v = (document.querySelector('input[name=brandpick]:checked') || {}).value;
+  const b = (brands || []).find((x) => x.id === v);
+  if (!b) return;
+  brand = { id: b.id, name: b.name, sponsored: !!b.sponsored };
+  logEvent('brand_selected');
+  go('eat');
+});
+$('brand-skip').addEventListener('click', () => { brand = null; logEvent('brand_skipped'); go('eat'); });
+
+// Approved content for the picked brand when it is sponsored and has some; otherwise neutral My Banana content.
+async function loadEducation() {
+  const key = brand ? brand.id : 'none';
+  if (eduCache[key]) return eduCache[key];
+  let q = db.from('brand_content').select('brand_id,kind,stage,title,body,url,sort').eq('approval_status', 'approved').order('sort');
+  q = brand ? q.or('brand_id.is.null,brand_id.eq.' + brand.id) : q.is('brand_id', null);
+  const { data, error } = await q;
+  if (error) return null;
+  const all = data || [];
+  const own = brand && brand.sponsored ? all.filter((x) => x.brand_id === brand.id) : [];
+  const edu = { sponsored: own.length > 0, items: own.length ? own : all.filter((x) => !x.brand_id) };
+  eduCache[key] = edu;
+  return edu;
+}
+function eduHeader(titleEl, chipEl, noteEl, edu) {
+  titleEl.textContent = edu && edu.sponsored ? brand.name + ' banana tips' : 'Banana tips from My Banana';
+  chipEl.hidden = !(edu && edu.sponsored);
+  const fallback = !!brand && !!edu && !edu.sponsored;
+  noteEl.hidden = !fallback;
+  if (fallback) noteEl.textContent = 'There is no brand content for ' + brand.name + ' yet, so these are My Banana\'s general tips.';
+}
+const eduItem = (x) => el('div', {}, [el('strong', { textContent: x.title }), x.body ? el('div', { className: 'small', textContent: x.body }) : '']);
+async function drawEducation() {
+  const body = $('res-edu-body'); body.textContent = 'Loading tips…';
+  $('learn-more').hidden = true;
+  const forScan = current;
+  const edu = await loadEducation();
+  if (current !== forScan || !current) return;
+  eduHeader($('res-edu-title'), $('res-edu-chip'), $('res-edu-note'), edu);
+  body.textContent = '';
+  if (!edu || !edu.items.length) { body.append(el('p', { className: 'muted', textContent: 'Tips are not available right now.' })); return; }
+  const ripe = edu.items.find((x) => x.kind === 'ripeness' && x.stage === current.stage.num);
+  const store = edu.items.find((x) => x.kind === 'storage');
+  [ripe, store].filter(Boolean).forEach((x) => body.append(eduItem(x)));
+  if (!ripe && !store) body.append(eduItem(edu.items[0]));
+  $('learn-more').hidden = false;
+  logEvent('education_shown', { stage: current.stage.num, sponsored: edu.sponsored });
+}
+$('learn-more').addEventListener('click', () => { go('learn'); });
+const EDU_SECTIONS = [['overview', 'About'], ['ripeness', 'Ripeness by stage'], ['storage', 'Storing your bananas'], ['recipe', 'Recipes'], ['video', 'Videos'], ['waste', 'Waste less'], ['website', 'Brand website']];
+async function showLearn() {
+  const body = $('learn-body'); body.textContent = 'Loading…';
+  const edu = await loadEducation();
+  eduHeader($('learn-title'), $('learn-chip'), $('learn-note'), edu);
+  body.textContent = '';
+  if (!edu || !edu.items.length) { body.append(el('div', { className: 'card muted', textContent: 'Tips are not available right now. Please try again later.' })); return; }
+  logEvent('learn_more_opened', { stage: current ? current.stage.num : null, sponsored: edu.sponsored });
+  EDU_SECTIONS.forEach(([kind, heading]) => {
+    const items = edu.items.filter((x) => x.kind === kind);
+    if (kind === 'website' && !items.length && !edu.sponsored) return;      // neutral content has no brand website
+    const card = el('div', { className: 'card stack' }, [el('h2', { textContent: heading })]);
+    if (!items.length) card.append(el('p', { className: 'small muted', textContent: 'Nothing here yet.' }));
+    items.forEach((x) => {
+      const block = eduItem(x);
+      if (x.url && /^https:\/\//i.test(x.url)) {
+        const a = el('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer', className: 'small', textContent: kind === 'video' ? 'Watch the video' : kind === 'website' ? 'Open the website' : 'Read more' });
+        if (kind === 'website') a.addEventListener('click', () => logEvent('website_opened', { sponsored: edu.sponsored }));
+        block.append(el('div', {}, [a]));
+      }
+      card.append(block);
+    });
+    body.append(card);
+  });
+}
+$('learn-scan').addEventListener('click', () => go('scan'));
+
 // ---- Ready When You Are: screen, rules and result ----
 function showEat() {
   const list = $('eat-list'); list.textContent = '';
@@ -230,7 +342,7 @@ function showEat() {
   $('eat-next').textContent = eatReturn ? 'Update My Result' : 'Continue to Scan';
 }
 $('eat-list').addEventListener('change', () => { $('eat-next').disabled = !document.querySelector('input[name=eat]:checked'); });
-$('eat-back').addEventListener('click', () => { if (eatReturn && current) { eatReturn = false; go('result'); } else go('store'); });
+$('eat-back').addEventListener('click', () => { if (eatReturn && current) { eatReturn = false; go('result'); } else go('brand'); });
 $('eat-next').addEventListener('click', async () => {
   const v = (document.querySelector('input[name=eat]:checked') || {}).value;
   if (!v) return;
@@ -384,7 +496,7 @@ async function logAttempt(fields) {
   const { error } = await db.from('scan_attempts').insert({
     id, device_id: state.deviceId, shopper_id: state.shopperId,
     store_id: state.store ? state.store.id : null, store_name_typed: state.store ? state.store.typed : null,
-    try_anyway: tryAnyway, session_id: sessionId, eating_time: eatTime, ...phoneClock(), ...fields,
+    try_anyway: tryAnyway, session_id: sessionId, eating_time: eatTime, brand_id: brand ? brand.id : null, ...phoneClock(), ...fields,
   });
   if (error) throw error;
   return id;
@@ -495,6 +607,7 @@ async function finishScan(pick, photos, readings, how, photoDistance) {
     const { error } = await db.from('scans').insert({
       id: scanId, attempt_id: attemptId, device_id: state.deviceId, shopper_id: state.shopperId,
       store_id: state.store.id, store_name_typed: state.store.typed,
+      brand_id: brand ? brand.id : null,
       eating_time: eatTime, match_category: planMatch(stage.num, eatTime).category,
       stage: stage.num, reader_version: usedLearned ? READER_VERSION.learned : READER_VERSION.chart, ...phoneClock(),
       color_values: {
@@ -571,6 +684,7 @@ function showResult() {
       el('i', { style: 'background:' + x.fill }), el('span', { textContent: x.num === s.num ? 'Your scan' : 'Stage ' + x.num })]));
   });
   drawPlan();
+  drawEducation();
   // more about this color
   $('res-between').hidden = !current.between;
   if (current.between) $('res-between').textContent = 'Your bananas are between Stage ' + Math.min(s.num, current.second.num) + ' and Stage ' + Math.max(s.num, current.second.num) + '. They lean toward Stage ' + s.num + ': ' + s.name + '.';
@@ -696,7 +810,7 @@ function showSaved() {
 // ---- exit ----
 $('exit-app').addEventListener('click', () => {
   stopCamera();
-  sessionStart = null; sessionSurveyDone = false; current = null; justSaved = false; eatTime = null;
+  sessionStart = null; sessionSurveyDone = false; current = null; justSaved = false; eatTime = null; brand = null;
   go('bye');
   try { window.close(); } catch (e) { /* browsers only let a page close itself in some cases */ }
 });
