@@ -120,3 +120,23 @@ td { padding: 12px; border-top: 1px solid var(--line); vertical-align: top; }
 .inline label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .grid-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: end; }
 @media (max-width: 600px) { .wrap { padding: 1rem; } .admin-bar { padding: 12px 1rem; } }
+
+/* brand education admin */
+.be { display: flex; flex-wrap: wrap; align-items: flex-start; }
+.be .side { flex: 0 0 230px; display: flex; flex-direction: column; gap: 8px; padding: 2rem 0 2rem 2rem; }
+.be .side .btn { justify-content: flex-start; min-height: 44px; }
+.be .side .btn[aria-current=page] { background: var(--navy); border-color: var(--navy); color: #fff; }
+.be .wrap { flex: 999 1 560px; min-width: 0; margin: 0; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.checks { display: flex; flex-wrap: wrap; gap: 12px; }
+.checks label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.acts .btn { min-height: 36px; padding: 0 10px; font-size: 13px; }
+td .acts { min-width: 150px; }
+#print-area { display: none; }
+@media (max-width: 800px) { .be .side { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; padding: 12px 1rem 0; } }
+@media print {
+  .admin-bar, .side, .tools, .btn, .toast, .no-print { display: none !important; }
+  .wrap { padding: 0; max-width: none; } .card { break-inside: avoid; } body { background: #fff; }
+  body.print-invoice .be { display: none; } body.print-invoice #print-area { display: block; padding: 24px; font-size: 14px; }
+}

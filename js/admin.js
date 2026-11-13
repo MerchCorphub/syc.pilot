@@ -59,7 +59,7 @@ document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click
 function openTab(tab) {
   document.querySelectorAll('[data-tab]').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   view.textContent = '';
-  ({ data: dataTab, survey: surveyTab, library: libraryTab, brands: brandsTab, stores: storesTab })[tab]();
+  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab })[tab]();
 }
 
 // ---------- pilot data ----------
@@ -517,77 +517,6 @@ async function addSamples(stage, input) {
   }
   toast(ok + ' of ' + files.length + ' added to ' + stage.name + (ok < files.length ? '. The rest had no clear banana in the picture.' : '.'), ok > 0);
   view.textContent = ''; libraryTab();
-}
-
-// ---------- brands and brand education content ----------
-const CONTENT_KINDS = [['overview', 'Brand overview'], ['ripeness', 'Ripeness education'], ['storage', 'Storage recommendation'], ['recipe', 'Recipe'], ['video', 'Educational video'], ['waste', 'Food waste tip'], ['website', 'Official website link']];
-async function brandsTab() {
-  view.append(el('p', { className: 'muted', textContent: 'Loading brands…' }));
-  const [b, c] = await Promise.all([db.from('brands').select('*').order('sort'), db.from('brand_content').select('*').order('sort')]);
-  view.textContent = '';
-  if (b.error || c.error) { view.append(el('div', { className: 'note err', textContent: 'Could not load brands.' })); return; }
-  const brands = b.data || [], content = c.data || [];
-  const reload = () => { view.textContent = ''; brandsTab(); };
-  view.append(el('div', { className: 'stack' }, [el('h1', { textContent: 'Brands and education content' }),
-    el('p', { className: 'muted', textContent: 'Shoppers can pick a brand before they scan. A brand shows its own content only when it is marked Sponsored and has approved content; every other brand shows My Banana\'s general tips. Sponsorship never changes the color reading or the plan match. Brand names are shown as text only, with no logos.' })]));
-
-  // brand directory
-  const bt = el('table', {}, [el('thead', {}, [el('tr', {}, ['Brand', 'Shown to shoppers', 'Sponsored', 'Approved content', 'Draft content', ''].map((t) => el('th', { textContent: t })))])]);
-  const bb = el('tbody'); bt.append(bb);
-  brands.forEach((br) => {
-    const flag = (key, label) => { const i = el('input', { type: 'checkbox', checked: !!br[key], ariaLabel: label + ' ' + br.name }); i.addEventListener('change', async () => { const { error } = await db.from('brands').update({ [key]: i.checked }).eq('id', br.id); if (error) { i.checked = !i.checked; toast('Could not change the brand.'); } }); return i; };
-    const mine = content.filter((x) => x.brand_id === br.id);
-    const del = el('button', { className: 'btn danger small', textContent: 'Delete' });
-    del.addEventListener('click', async () => { if (!window.confirm('Delete ' + br.name + ' and its content? Scans already taken keep their data but lose the brand name. To keep the name, untick "Shown to shoppers" instead.')) return; const { error } = await db.from('brands').delete().eq('id', br.id); if (error) return toast('Could not delete the brand.'); reload(); });
-    bb.append(el('tr', {}, [el('td', { textContent: br.name }), el('td', {}, [flag('active', 'Show')]), el('td', {}, [flag('sponsored', 'Sponsored')]),
-      el('td', { textContent: mine.filter((x) => x.approval_status === 'approved').length }), el('td', { textContent: mine.filter((x) => x.approval_status !== 'approved').length }), el('td', {}, [del])]));
-  });
-  const newName = el('input', { type: 'text', id: 'b-name', maxLength: 80, placeholder: 'Brand name' });
-  const addB = el('button', { className: 'btn primary', textContent: 'Add brand' });
-  addB.addEventListener('click', async () => { if (!newName.value.trim()) return toast('The brand needs a name.'); const { error } = await db.from('brands').insert({ name: newName.value.trim(), sort: brands.length + 1 }); if (error) return toast('Could not add the brand. Is the name already used?'); reload(); });
-  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Brand directory' }), el('div', { className: 'scroll' }, [bt]),
-    el('div', { className: 'grid-form' }, [el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'b-name', textContent: 'New brand' }), newName]), addB])]));
-
-  // add content
-  const f = {
-    brand: el('select', { id: 'c-brand' }, [el('option', { value: '', textContent: 'My Banana (general tips)' })].concat(brands.map((br) => el('option', { value: br.id, textContent: br.name })))),
-    kind: el('select', { id: 'c-kind' }, CONTENT_KINDS.map(([v, t]) => el('option', { value: v, textContent: t }))),
-    stage: el('select', { id: 'c-stage' }, [el('option', { value: '', textContent: 'All stages' })].concat(STAGES.map((x) => el('option', { value: x.num, textContent: 'Stage ' + x.num + ': ' + x.name })))),
-    title: el('input', { type: 'text', id: 'c-title', maxLength: 120 }),
-    body: el('textarea', { id: 'c-body', rows: 3, maxLength: 1200 }),
-    url: el('input', { type: 'text', id: 'c-url', maxLength: 300, placeholder: 'https://' }),
-  };
-  const fld = (label, input) => el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: input.id, textContent: label }), input]);
-  const addC = el('button', { className: 'btn primary', textContent: 'Add as draft' });
-  addC.addEventListener('click', async () => {
-    const url = f.url.value.trim();
-    if (!f.title.value.trim()) return toast('The content needs a title.');
-    if (url && !/^https:\/\//i.test(url)) return toast('Links must start with https://');
-    const { error } = await db.from('brand_content').insert({ brand_id: f.brand.value || null, kind: f.kind.value, stage: f.stage.value ? Number(f.stage.value) : null, title: f.title.value.trim(), body: f.body.value.trim() || null, url: url || null, sort: content.length + 1 });
-    if (error) return toast('Could not add the content.');
-    reload();
-  });
-  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Add education content' }),
-    el('p', { className: 'small muted', textContent: 'New content is saved as a draft. Shoppers see it only after you approve it. Add brand content only when the brand has approved the material.' }),
-    el('div', { className: 'grid-form' }, [fld('For', f.brand), fld('Type', f.kind), fld('Stage (ripeness only)', f.stage), fld('Title', f.title)]),
-    fld('Text', f.body), fld('Link (videos and websites)', f.url), addC]));
-
-  // content list
-  const ct = el('table', { style: 'min-width:900px' }, [el('thead', {}, [el('tr', {}, ['For', 'Type', 'Title', 'Text', 'Status', '', ''].map((t) => el('th', { textContent: t })))])]);
-  const cb = el('tbody'); ct.append(cb);
-  content.forEach((x) => {
-    const br = brands.find((y) => y.id === x.brand_id);
-    const ok = x.approval_status === 'approved';
-    const tog = el('button', { className: 'btn small', textContent: ok ? 'Move to draft' : 'Approve' });
-    tog.addEventListener('click', async () => { const { error } = await db.from('brand_content').update({ approval_status: ok ? 'draft' : 'approved', updated_at: new Date().toISOString() }).eq('id', x.id); if (error) return toast('Could not change the status.'); reload(); });
-    const del = el('button', { className: 'btn danger small', textContent: 'Delete' });
-    del.addEventListener('click', async () => { if (!window.confirm('Delete "' + x.title + '"?')) return; const { error } = await db.from('brand_content').delete().eq('id', x.id); if (error) return toast('Could not delete the content.'); reload(); });
-    cb.append(el('tr', {}, [el('td', { textContent: br ? br.name : 'My Banana (general)' }), el('td', { textContent: (CONTENT_KINDS.find((k) => k[0] === x.kind) || [0, x.kind])[1] + (x.stage ? ' · Stage ' + x.stage : '') }),
-      el('td', { textContent: x.title }), el('td', { className: 'small', textContent: (x.body || '') + (x.url ? ' ' + x.url : '') }),
-      el('td', {}, [el('span', { className: 'chip ' + (ok ? 'ok' : 'brass'), textContent: ok ? 'Approved' : 'Draft' })]), el('td', {}, [tog]), el('td', {}, [del])]));
-  });
-  if (!content.length) cb.append(el('tr', {}, [el('td', { colSpan: 7, className: 'muted', textContent: 'No content yet.' })]));
-  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Education content' }), el('div', { className: 'scroll' }, [ct])]));
 }
 
 // ---------- stores ----------
