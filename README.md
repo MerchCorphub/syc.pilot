@@ -9,6 +9,7 @@ Patent pending, U.S. App. No. 19/836,387. © Merch Corporation.
 | --- | --- |
 | `index.html`, `js/app.js` | Shopper app: welcome, optional registration, store pick, camera scan, result, survey, saved scans |
 | `admin.html`, `js/admin.js` | Admin pages (sign-in required): pilot data, scan log export and delete, survey builder, store list |
+| `admin/brand-education/`, `js/brand-admin.js` | Brand Education admin center (sign-in required): brand directory, education content workflow, pricing, service contracts, manual invoices, reports, access roles and change history |
 | `js/reader.js` | Color reader from the SYC working model (four stages) |
 | `js/config.js` | Supabase project address, stage names, scan settings |
 | `manifest.webmanifest`, `sw.js`, `icons/` | Lets shoppers save the app to a home screen |

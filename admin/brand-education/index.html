@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Banana · Brand Education admin</title>
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" sizes="32x32" href="../../icons/favicon-32.png">
+<link rel="stylesheet" href="../../css/app.css">
+</head>
+<body>
+<header class="admin-bar">
+  <div class="brand">My Banana · Brand Education admin</div>
+  <nav class="tabs" id="top" hidden>
+    <a class="btn" href="../../admin.html" id="pilot-link">Pilot admin</a>
+    <button class="btn" id="sign-out">Sign out</button>
+  </nav>
+</header>
+
+<main class="wrap" id="signin" hidden>
+  <div class="card stack" style="max-width:420px">
+    <h1>Admin sign in</h1>
+    <div class="field"><label class="label" for="email">Email</label><input id="email" type="email" autocomplete="username"></div>
+    <div class="field"><label class="label" for="password">Password</label><input id="password" type="password" autocomplete="current-password"></div>
+    <button class="btn primary" id="do-signin">Sign in</button>
+    <p class="small muted">Only approved My Banana administrators can open this page. Create your account on the Pilot admin page first.</p>
+    <div class="note" id="auth-msg" hidden></div>
+  </div>
+</main>
+
+<div class="be" id="app" hidden>
+  <nav class="side" id="side" aria-label="Brand Education sections"></nav>
+  <main class="wrap" id="view"></main>
+</div>
+<div id="print-area"></div>
+<div class="toast note err" id="toast" role="alert" hidden></div>
+<script type="module" src="../../js/brand-admin.js"></script>
+</body>
+</html>
