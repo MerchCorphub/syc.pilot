@@ -88,13 +88,14 @@ let justSaved = false;
 // ---- session: 5 minutes from when the app opens ----
 let sessionStart = Date.now(), sessionId = uuid(), sessionSurveyDone = false, sessionNote = '';
 const expired = () => !!sessionStart && Date.now() - sessionStart >= SESSION_MS;
-function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionSurveyDone = false; sessionNote = ''; eatTime = null; brand = null; }
+function startSession() { sessionStart = Date.now(); sessionId = uuid(); sessionLogged = false; sessionSurveyDone = false; sessionNote = ''; eatTime = null; brand = null; }
 function endSession(note) {
   stopCamera();
   sessionStart = null; sessionSurveyDone = false; current = null; sessionNote = note || ''; eatTime = null; brand = null;
   go('welcome');
 }
 const STARTS_WORK = ['register', 'store', 'brand', 'eat', 'scan'];
+let sessionLogged = false;  // one anonymous session_started event per session
 let brand = null;           // the brand picked for this session (optional): { id, name, sponsored } or null
 
 // ---- Ready When You Are: the shopper's eating plan, kept for this session only ----
@@ -111,6 +112,7 @@ function go(name) {
     justSaved = false;
     return endSession('Your scan is saved. Your 5-minute session has ended. Tap Start scan to begin a new one.');
   }
+  if (STARTS_WORK.includes(name) && !sessionLogged) { sessionLogged = true; logEvent('session_started'); }
   if (name === 'register' && state.shopperId) name = screen === 'store' ? 'welcome' : 'store';
   screen = name;
   document.querySelectorAll('[data-screen]').forEach((s) => { s.hidden = s.dataset.screen !== name; });
@@ -235,7 +237,7 @@ async function showBrands() {
   const list = $('brand-list');
   if (!brands) {
     list.textContent = 'Loading brands…';
-    const { data, error } = await db.from('brands').select('id,name,kind,sponsored').eq('active', true).order('sort');
+    const { data, error } = await db.from('brands').select('id,name,kind').eq('active', true).order('sort');
     brands = error ? [] : (data || []);
   }
   $('brand-search').value = '';
@@ -259,7 +261,7 @@ $('brand-next').addEventListener('click', () => {
   const v = (document.querySelector('input[name=brandpick]:checked') || {}).value;
   const b = (brands || []).find((x) => x.id === v);
   if (!b) return;
-  brand = { id: b.id, name: b.name, sponsored: !!b.sponsored };
+  brand = { id: b.id, name: b.name };
   logEvent('brand_selected');
   go('eat');
 });
@@ -269,12 +271,14 @@ $('brand-skip').addEventListener('click', () => { brand = null; logEvent('brand_
 async function loadEducation() {
   const key = brand ? brand.id : 'none';
   if (eduCache[key]) return eduCache[key];
-  let q = db.from('brand_content').select('brand_id,kind,stage,title,body,url,sort').eq('approval_status', 'approved').order('sort');
+  // The database only returns published content inside its dates, and a brand's own content only while
+  // that brand has an active agreement. So any brand rows that come back are approved sponsored content.
+  let q = db.from('brand_content').select('brand_id,campaign_id,kind,stages,eating_times,title,body,url,media_url,sponsored_disclosure,sort').eq('approval_status', 'published').order('sort');
   q = brand ? q.or('brand_id.is.null,brand_id.eq.' + brand.id) : q.is('brand_id', null);
   const { data, error } = await q;
   if (error) return null;
   const all = data || [];
-  const own = brand && brand.sponsored ? all.filter((x) => x.brand_id === brand.id) : [];
+  const own = brand ? all.filter((x) => x.brand_id === brand.id) : [];
   const edu = { sponsored: own.length > 0, items: own.length ? own : all.filter((x) => !x.brand_id) };
   eduCache[key] = edu;
   return edu;
@@ -286,6 +290,7 @@ function eduHeader(titleEl, chipEl, noteEl, edu) {
   noteEl.hidden = !fallback;
   if (fallback) noteEl.textContent = 'There is no brand content for ' + brand.name + ' yet, so these are My Banana\'s general tips.';
 }
+const fits = (x) => (!x.stages || !x.stages.length || !current || x.stages.includes(current.stage.num)) && (!x.eating_times || !x.eating_times.length || !eatTime || x.eating_times.includes(eatTime));
 const eduItem = (x) => el('div', {}, [el('strong', { textContent: x.title }), x.body ? el('div', { className: 'small', textContent: x.body }) : '']);
 async function drawEducation() {
   const body = $('res-edu-body'); body.textContent = 'Loading tips…';
@@ -296,15 +301,18 @@ async function drawEducation() {
   eduHeader($('res-edu-title'), $('res-edu-chip'), $('res-edu-note'), edu);
   body.textContent = '';
   if (!edu || !edu.items.length) { body.append(el('p', { className: 'muted', textContent: 'Tips are not available right now.' })); return; }
-  const ripe = edu.items.find((x) => x.kind === 'ripeness' && x.stage === current.stage.num);
-  const store = edu.items.find((x) => x.kind === 'storage');
+  const usable = edu.items.filter(fits);
+  const ripe = usable.find((x) => x.kind === 'ripeness' && x.stages && x.stages.includes(current.stage.num)) || usable.find((x) => x.kind === 'ripeness' && (!x.stages || !x.stages.length));
+  const store = usable.find((x) => x.kind === 'storage') || usable.find((x) => x.kind === 'article' || x.kind === 'overview');
   [ripe, store].filter(Boolean).forEach((x) => body.append(eduItem(x)));
-  if (!ripe && !store) body.append(eduItem(edu.items[0]));
+  if (!ripe && !store) body.append(eduItem(usable[0] || edu.items[0]));
   $('learn-more').hidden = false;
-  logEvent('education_shown', { stage: current.stage.num, sponsored: edu.sponsored });
+  const camp = [ripe, store].filter(Boolean).map((x) => x.campaign_id).find(Boolean) || null;
+  logEvent('education_shown', { stage: current.stage.num, sponsored: edu.sponsored, campaign_id: camp });
 }
 $('learn-more').addEventListener('click', () => { go('learn'); });
-const EDU_SECTIONS = [['overview', 'About'], ['ripeness', 'Ripeness by stage'], ['storage', 'Storing your bananas'], ['recipe', 'Recipes'], ['video', 'Videos'], ['waste', 'Waste less'], ['website', 'Brand website']];
+const EDU_SECTIONS = [['overview', 'About'], ['article', 'Articles'], ['ripeness', 'Ripeness by stage'], ['storage', 'Storing your bananas'], ['recipe', 'Recipes'], ['video', 'Videos'], ['faq', 'Questions and answers'], ['image', 'Pictures'], ['waste', 'Waste less'], ['resource', 'More resources'], ['website', 'Brand website']];
+const EDU_OPTIONAL = ['article', 'faq', 'image', 'resource'];   // shown only when they have content
 async function showLearn() {
   const body = $('learn-body'); body.textContent = 'Loading…';
   const edu = await loadEducation();
@@ -313,17 +321,18 @@ async function showLearn() {
   if (!edu || !edu.items.length) { body.append(el('div', { className: 'card muted', textContent: 'Tips are not available right now. Please try again later.' })); return; }
   logEvent('learn_more_opened', { stage: current ? current.stage.num : null, sponsored: edu.sponsored });
   EDU_SECTIONS.forEach(([kind, heading]) => {
-    const items = edu.items.filter((x) => x.kind === kind);
-    if (kind === 'website' && !items.length && !edu.sponsored) return;      // neutral content has no brand website
+    const items = edu.items.filter((x) => x.kind === kind && (kind === 'ripeness' || fits(x)));
+    if (!items.length && (EDU_OPTIONAL.includes(kind) || (kind === 'website' && !edu.sponsored))) return;
     const card = el('div', { className: 'card stack' }, [el('h2', { textContent: heading })]);
     if (!items.length) card.append(el('p', { className: 'small muted', textContent: 'Nothing here yet.' }));
     items.forEach((x) => {
       const block = eduItem(x);
       if (x.url && /^https:\/\//i.test(x.url)) {
         const a = el('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer', className: 'small', textContent: kind === 'video' ? 'Watch the video' : kind === 'website' ? 'Open the website' : 'Read more' });
-        if (kind === 'website') a.addEventListener('click', () => logEvent('website_opened', { sponsored: edu.sponsored }));
+        a.addEventListener('click', () => logEvent(kind === 'website' ? 'website_opened' : kind === 'recipe' ? 'recipe_opened' : 'cta_clicked', { sponsored: edu.sponsored, campaign_id: x.campaign_id || null }));
         block.append(el('div', {}, [a]));
       }
+      if (kind === 'image' && x.media_url && /^https:\/\//i.test(x.media_url)) block.append(el('img', { src: x.media_url, alt: x.title, loading: 'lazy', style: 'max-width:100%;border-radius:6px' }));
       card.append(block);
     });
     body.append(card);
@@ -347,6 +356,7 @@ $('eat-next').addEventListener('click', async () => {
   const v = (document.querySelector('input[name=eat]:checked') || {}).value;
   if (!v) return;
   eatTime = v;
+  logEvent('eating_time_selected', { eating_time: v });
   if (eatReturn && current) {            // plan changed after a result: re-judge the same scan
     eatReturn = false;
     const m = planMatch(current.stage.num, eatTime);
@@ -627,6 +637,7 @@ async function finishScan(pick, photos, readings, how, photoDistance) {
     });
     if (error) throw error;
     uploadPhotos(scanId, photos);        // runs in the background
+    logEvent('scan_completed', { stage: stage.num, eating_time: eatTime, match_category: planMatch(stage.num, eatTime).category });
     current = { scanId, stage, second, between: !!pick.m.between && !!second, store: state.store.name,
       learned: usedLearned, votes: pick.m.votes, neighbours: pick.m.k, agree: pick.m.agree, voters: pick.m.voters, dim: !!pick.m.dim };
     showResult();
