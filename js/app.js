@@ -834,3 +834,6 @@ $('install-now').addEventListener('click', async () => { if (installEvent) { ins
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 go('welcome');
+
+// Patent notice on every shopper screen
+document.querySelectorAll('.foot').forEach((f) => { const p = document.createElement('p'); p.className = 'patent'; p.textContent = 'Patent Pending · U.S. App. No. 19/836,387'; f.append(p); });

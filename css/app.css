@@ -142,3 +142,6 @@ td .acts { min-width: 150px; }
 }
 
 .hero { display: block; width: 150px; height: 150px; margin: 0 auto; border-radius: 28px; }
+
+.patent { margin: 0; font-size: 11px; line-height: 16px; color: var(--muted, #566172); text-align: center; }
+body > .patent { padding: 16px; }
