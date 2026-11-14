@@ -145,3 +145,9 @@ td .acts { min-width: 150px; }
 
 .patent { margin: 0; font-size: 11px; line-height: 16px; color: var(--muted, #566172); text-align: center; }
 body > .patent { padding: 16px; }
+
+/* Consumer Insights & Rewards coupon code */
+.code { white-space: nowrap; font: 600 20px/28px 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; letter-spacing: .08em; color: var(--navy); }
+.code.big { font-size: 32px; line-height: 40px; text-align: center; padding: 16px; border: 2px dashed var(--brass); border-radius: 6px; background: var(--brass-soft); }
+.switch-on { border-color: var(--ok); }
+.stack > .chip { align-self: flex-start; }

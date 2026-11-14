@@ -191,7 +191,20 @@
     </div>
     <div class="foot">
       <button class="btn primary" id="survey-send">Send answers</button>
-      <button class="btn link small" data-go="saved">Skip survey</button>
+      <button class="btn link small" id="survey-skip" data-go="saved">Skip survey</button>
+    </div>
+  </section>
+
+  <!-- 6c Coupon (Consumer Insights & Rewards) -->
+  <section data-screen="coupon" hidden>
+    <header class="bar"><span></span><div class="brand">My Banana</div><span class="chip brass">Sponsored</span></header>
+    <div class="body">
+      <h1>Thank you</h1>
+      <div class="card stack coupon" id="coupon-card"></div>
+      <p class="small muted">This code is also kept under My scans on this phone.</p>
+    </div>
+    <div class="foot">
+      <button class="btn primary" data-go="saved">Done</button>
     </div>
   </section>
 
@@ -203,6 +216,10 @@
       <h1>My scans</h1>
       <p class="small muted">Saved on this phone.</p>
       <div class="card" id="saved-list"></div>
+      <div class="stack" id="coupons-wrap" hidden>
+        <h2>My coupons</h2>
+        <div class="card" id="coupon-list"></div>
+      </div>
     </div>
     <div class="foot">
       <button class="btn primary" data-go="store">Scan again</button>

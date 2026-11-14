@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Banana · Consumer Insights &amp; Rewards admin</title>
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" sizes="32x32" href="../../icons/favicon-32.png">
+<link rel="stylesheet" href="../../css/app.css">
+</head>
+<body>
+<header class="admin-bar">
+  <div class="brand">My Banana · Consumer Insights &amp; Rewards admin</div>
+  <nav class="tabs" id="top" hidden>
+    <a class="btn" href="../../admin.html">Pilot admin</a>
+    <a class="btn" href="../brand-education/">Brand Education</a>
+    <button class="btn" id="sign-out">Sign out</button>
+  </nav>
+</header>
+
+<main class="wrap" id="signin" hidden>
+  <div class="card stack" style="max-width:420px">
+    <h1>Admin sign in</h1>
+    <div class="field"><label class="label" for="email">Email</label><input id="email" type="email" autocomplete="username"></div>
+    <div class="field"><label class="label" for="password">Password</label><input id="password" type="password" autocomplete="current-password"></div>
+    <button class="btn primary" id="do-signin">Sign in</button>
+    <p class="small muted">For My Banana platform owners and admins. Create your account on the Pilot admin page first.</p>
+    <div class="note" id="auth-msg" hidden></div>
+  </div>
+</main>
+
+<div class="be" id="app" hidden>
+  <nav class="side" id="side" aria-label="Consumer Insights sections"></nav>
+  <main class="wrap" id="view"></main>
+</div>
+<div id="print-area"></div>
+<div class="toast note err" id="toast" role="alert" hidden></div>
+<script type="module" src="../../js/insights-admin.js"></script>
+<p class="patent">Patent Pending · U.S. App. No. 19/836,387</p>
+</body>
+</html>

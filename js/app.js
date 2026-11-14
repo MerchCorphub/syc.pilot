@@ -745,19 +745,25 @@ $('scan-again').addEventListener('click', async () => {
 });
 
 // ---- survey ----
-let questions = [];
-async function showSurvey() {
-  const form = $('survey-form');
-  form.textContent = 'Loading…';
+// One survey per session. When Consumer Insights & Rewards is switched on and a sponsor campaign fits this
+// store (and brand), the shopper is invited to the sponsor's survey instead; it may include the pilot questions.
+// The sponsor never changes the ripeness result, and any reward never depends on the answers given.
+let questions = [];        // pilot questions on screen
+let sponsor = null;        // the sponsor offer from insights_offer, or null
+let sponsorQs = [];        // sponsor questions on screen
+const money = (n) => { const v = Number(n); return isFinite(v) && v > 0 ? '$' + v.toFixed(2) : ''; };
+const longDay = (d) => (d ? new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString([], { dateStyle: 'long' }) : '');
+
+function surveyFoot(show) { $('survey-send').hidden = !show; $('survey-skip').hidden = !show; }
+async function loadPilotQuestions() {
   const { data, error } = await db.from('survey_questions')
     .select('id,position,question_text,answer_type,choices,required,version').eq('active', true).order('position');
-  questions = error ? [] : (data || []);
-  if (!questions.length) { go('saved'); return; }
-  $('survey-title').textContent = 'Scan saved. ' + (questions.length === 1 ? 'One quick question' : questions.length + ' quick questions');
-  form.textContent = '';
-  questions.forEach((q, i) => {
-    const title = (i + 1) + '. ' + q.question_text + (q.required ? '' : ' (optional)');
-    const name = 'q_' + q.id;
+  return error ? [] : (data || []);
+}
+function drawQuestions(form, list, prefix, startAt) {
+  list.forEach((q, i) => {
+    const title = (startAt + i + 1) + '. ' + q.question_text + (q.required ? '' : ' (optional)');
+    const name = prefix + q.id;
     let choices = Array.isArray(q.choices) ? q.choices.map(String) : [];
     if (q.answer_type === 'yes_no') choices = ['Yes', 'No'];
     if (q.answer_type === 'rating') choices = ['1', '2', '3', '4', '5'];
@@ -773,38 +779,163 @@ async function showSurvey() {
     form.append(el('fieldset', { className: 'card' }, [el('legend', { textContent: title }), opts]));
   });
 }
+function readAnswer(q, name) {
+  if (q.answer_type === 'text') return (($(name) || {}).value || '').trim() || null;
+  if (q.answer_type === 'pick_many') {
+    const v = [...document.querySelectorAll('input[name="' + name + '"]:checked')].map((i) => i.value);
+    return v.length ? v : null;
+  }
+  return (document.querySelector('input[name="' + name + '"]:checked') || {}).value || null;
+}
+function rewardLines(r) {
+  if (!r) return [];
+  const lines = [el('strong', { textContent: 'Your reward: ' + (r.offer_text || (money(r.value) + ' off')) })];
+  if (r.eligible_products) lines.push(el('div', { className: 'small', textContent: 'Good on: ' + r.eligible_products }));
+  lines.push(el('div', { className: 'small', textContent: 'One code per phone, used once at checkout' + (r.stores ? ' at ' + r.stores.join(', ') : ' at participating stores') + '. Good for ' + r.valid_days + ' days.' }));
+  if (r.terms) lines.push(el('div', { className: 'small muted', textContent: r.terms }));
+  return lines;
+}
+
+async function showSurvey() {
+  const form = $('survey-form');
+  form.textContent = 'Loading…';
+  surveyFoot(false);
+  sponsor = null; sponsorQs = []; questions = [];
+  try {
+    const { data } = await db.rpc('insights_offer', { p_device: state.deviceId, p_session: sessionId, p_store: state.store || '', p_brand: brand ? brand.id : null });
+    if (data && Array.isArray(data.questions) && data.questions.length) sponsor = data;
+  } catch (e) { /* no sponsor survey; the pilot survey runs as usual */ }
+  if (sponsor) return showInvite();
+  return showPilotSurvey();
+}
+async function showPilotSurvey() {
+  const form = $('survey-form');
+  sponsor = null; sponsorQs = [];
+  questions = await loadPilotQuestions();
+  if (!questions.length) { go('saved'); return; }
+  $('survey-title').textContent = 'Scan saved. ' + (questions.length === 1 ? 'One quick question' : questions.length + ' quick questions');
+  form.textContent = '';
+  drawQuestions(form, questions, 'q_', 0);
+  surveyFoot(true);
+}
+function showInvite() {
+  const form = $('survey-form');
+  form.textContent = '';
+  $('survey-title').textContent = 'Scan saved. A short survey from ' + sponsor.sponsor_name;
+  const take = el('button', { className: 'btn primary', textContent: sponsor.reward ? 'Take the survey and get my reward' : 'Take the survey' });
+  const no = el('button', { className: 'btn', textContent: 'No thanks' });
+  take.addEventListener('click', startSponsorSurvey);
+  no.addEventListener('click', () => {
+    db.rpc('insights_decline', { p_invite: sponsor.invite_id, p_device: state.deviceId }).then(() => {}, () => {});
+    showPilotSurvey();
+  });
+  form.append(el('div', { className: 'card stack' }, [
+    el('span', { className: 'chip brass', textContent: 'Sponsored by ' + sponsor.sponsor_name }),
+    sponsor.intro ? el('p', { textContent: sponsor.intro }) : '',
+    el('p', { className: 'small', textContent: sponsor.questions.length + (sponsor.questions.length === 1 ? ' question' : ' questions') + (sponsor.include_pilot_questions ? ', plus our usual quick questions.' : '.') }),
+  ].concat(rewardLines(sponsor.reward)).concat([
+    el('p', { className: 'small muted', textContent: 'Taking part is your choice. Honest answers are welcome: the reward does not depend on what you say. Your ripeness result is not affected. ' + sponsor.sponsor_name + ' sees combined answers only, never your name or contact.' }),
+    take, no,
+  ])));
+}
+async function startSponsorSurvey() {
+  const form = $('survey-form');
+  form.textContent = 'Loading…';
+  sponsorQs = sponsor.questions;
+  questions = sponsor.include_pilot_questions ? await loadPilotQuestions() : [];
+  form.textContent = '';
+  form.append(el('span', { className: 'chip brass', textContent: 'Sponsored by ' + sponsor.sponsor_name }));
+  drawQuestions(form, sponsorQs, 's_', 0);
+  drawQuestions(form, questions, 'q_', sponsorQs.length);
+  surveyFoot(true);
+}
+
 $('survey-send').addEventListener('click', async () => {
   const scanId = current ? current.scanId : null;
   const rows = [];
+  const sAnswers = {};
+  for (const q of sponsorQs) {
+    const answer = readAnswer(q, 's_' + q.id);
+    if (answer === null && q.required) { toast('Please answer: ' + q.question_text); return; }
+    if (answer !== null) sAnswers[q.id] = answer;
+  }
   for (const q of questions) {
-    const name = 'q_' + q.id;
-    let answer = null;
-    if (q.answer_type === 'text') answer = ($(name).value || '').trim() || null;
-    else if (q.answer_type === 'pick_many') {
-      const v = [...document.querySelectorAll('input[name="' + name + '"]:checked')].map((i) => i.value);
-      answer = v.length ? v : null;
-    } else answer = (document.querySelector('input[name="' + name + '"]:checked') || {}).value || null;
+    const answer = readAnswer(q, 'q_' + q.id);
     if (answer === null && q.required) { toast('Please answer: ' + q.question_text); return; }
     if (answer !== null) rows.push({
       question_id: q.id, question_version: q.version, question_text_asked: q.question_text,
       scan_id: scanId, device_id: state.deviceId, shopper_id: state.shopperId, answer, ...phoneClock(),
     });
   }
+  $('survey-send').disabled = true;
+  let result = null;
+  if (sponsor && sponsorQs.length) {
+    const { data, error } = await db.rpc('insights_submit', { p_invite: sponsor.invite_id, p_device: state.deviceId, p_scan: scanId, p_answers: sAnswers });
+    if (error) { $('survey-send').disabled = false; toast('Could not send your answers. Check your connection and try again.'); return; }
+    result = data || {};
+    if (result.status === 'incomplete') { $('survey-send').disabled = false; toast('Please answer: ' + (result.question || 'every required question')); return; }
+  }
   if (rows.length) {
-    $('survey-send').disabled = true;
     const { error } = await db.from('survey_answers').insert(rows);
-    $('survey-send').disabled = false;
-    if (error) { toast('Could not send your answers. Check your connection and try again.'); return; }
+    if (error && !result) { $('survey-send').disabled = false; toast('Could not send your answers. Check your connection and try again.'); return; }
+  }
+  $('survey-send').disabled = false;
+  if (rows.length || result) {
     const mine = state.scans.find((s) => s.id === scanId);
     if (mine) { mine.survey = true; save(); }
     sessionSurveyDone = true;
   }
+  if (result && result.status === 'coupon') {
+    state.coupons = [{ code: result.code, offer_text: result.offer_text, value: result.value, expires_on: result.expires_on, sponsor_name: result.sponsor_name, terms: result.terms, status: 'issued' }]
+      .concat((state.coupons || []).filter((c) => c.code !== result.code)).slice(0, 20);
+    save();
+    showCoupon(result);
+    return;
+  }
+  if (result && (result.status === 'already' || result.status === 'closed' || result.status === 'expired')) {
+    toast(result.status === 'already' ? 'Thank you. This phone already took part in this survey.' : 'Thank you. This survey has just closed, so no reward could be issued.');
+  }
   go('saved');
 });
+
+// ---- coupon ----
+function couponCard(c, big) {
+  const kids = [
+    el('span', { className: 'chip brass', textContent: 'Sponsored by ' + (c.sponsor_name || 'My Banana partner') }),
+    el('strong', { textContent: c.offer_text || (money(c.value) + ' off') }),
+    el('div', { className: big ? 'code big' : 'code', textContent: c.code }),
+  ];
+  if (big && c.eligible_products) kids.push(el('div', { className: 'small', textContent: 'Good on: ' + c.eligible_products }));
+  if (big) kids.push(el('div', { className: 'small', textContent: 'Show this code at checkout' + (c.stores ? ' at ' + c.stores.join(', ') : ' at a participating store') + '. It can be used one time.' }));
+  kids.push(el('div', { className: 'small muted', textContent: c.status === 'redeemed' ? 'Used' : c.status === 'voided' ? 'No longer valid' : 'Good through ' + longDay(c.expires_on) }));
+  if (big && c.terms) kids.push(el('div', { className: 'small muted', textContent: c.terms }));
+  return el('div', { className: 'stack' }, kids);
+}
+function showCoupon(c) {
+  const card = $('coupon-card'); card.textContent = '';
+  card.append(couponCard(c, true));
+  go('coupon');
+}
+async function drawCoupons() {
+  const wrap = $('coupons-wrap'), list = $('coupon-list');
+  const mine = state.coupons || [];
+  wrap.hidden = !mine.length;
+  if (!mine.length) return;
+  const draw = () => { list.textContent = ''; (state.coupons || []).forEach((c) => list.append(el('div', { className: 'list-item' }, [couponCard(c, false)]))); };
+  draw();
+  try {
+    const { data } = await db.rpc('insights_my_coupons', { p_device: state.deviceId });
+    if (Array.isArray(data)) {
+      (state.coupons || []).forEach((c) => { const live = data.find((d) => d.code === c.code); if (live) { c.status = live.status; c.expires_on = live.expires_on; } });
+      save(); draw();
+    }
+  } catch (e) { /* show what the phone has */ }
+}
 
 // ---- saved scans ----
 function showSaved() {
   $('saved-thanks').hidden = !justSaved; justSaved = false;
+  drawCoupons();
   const list = $('saved-list'); list.textContent = '';
   if (!state.scans.length) { list.append(el('p', { className: 'muted', textContent: 'No saved scans yet.' })); return; }
   state.scans.forEach((s) => {
