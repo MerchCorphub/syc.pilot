@@ -79,9 +79,10 @@ async function loadData() {
   if (from) { q = q.gte('created_at', from.toISOString()); a = a.gte('created_at', from.toISOString()); }
   let ev = db.from('engagement_events').select('event,brand_id,sponsored,created_at').order('created_at', { ascending: false }).limit(20000);
   if (from) ev = ev.gte('created_at', from.toISOString());
-  const [att, ans, shop, stores, weak, events] = await Promise.all([
+  const [att, ans, shop, shopScans, stores, weak, events] = await Promise.all([
     q, a,
-    db.from('shoppers').select('id', { count: 'exact', head: true }),
+    db.from('shoppers').select('id,first_name,contact,contact_ok,created_at').order('created_at', { ascending: false }).limit(5000),
+    db.from('scan_attempts').select('shopper_id,result').not('shopper_id', 'is', null).limit(20000),
     db.from('stores').select('id,name').order('name'),
     db.from('weak_camera_phones').select('phone_model'),
     ev,
@@ -91,7 +92,7 @@ async function loadData() {
     scan: Array.isArray(r.scans) ? r.scans[0] || null : r.scans || null,
     storeLabel: (r.stores && r.stores.name) || r.store_name_typed || 'Not given',
   }));
-  cache = { rows, events: events.data || [], answers: ans.data || [], shoppers: shop.count || 0, stores: stores.data || [], weak: (weak.data || []).map((x) => x.phone_model) };
+  cache = { rows, events: events.data || [], answers: ans.data || [], shoppers: (shop.data || []).length, shopperList: shop.data || [], shopperScans: shopScans.data || [], stores: stores.data || [], weak: (weak.data || []).map((x) => x.phone_model) };
 }
 
 async function dataTab() {
@@ -244,6 +245,20 @@ function drawData() {
     el('p', { className: 'small muted', textContent: 'Photos are deleted automatically after 120 to 150 days. Records stay until you delete them here.' + (shown.length > 500 ? ' Showing the newest 500 of ' + shown.length + '; the export has all of them.' : '') }),
     el('div', { className: 'scroll' }, [table])]));
 
+  // registered shoppers (all dates; admins only)
+  const scansBy = {};
+  cache.shopperScans.forEach((x) => { const c = (scansBy[x.shopper_id] = scansBy[x.shopper_id] || { n: 0, ok: 0 }); c.n++; if (x.result === 'success') c.ok++; });
+  const sList = cache.shopperList;
+  const sExp = el('button', { className: 'btn primary small', textContent: 'Export registered shoppers (CSV)' }); sExp.addEventListener('click', () => exportShoppers(sList, scansBy));
+  const sTable = el('table', { style: 'min-width:720px' }, [el('thead', {}, [el('tr', {}, ['Registered', 'First name', 'Email or mobile', 'May contact', 'Scan attempts', 'Successful scans'].map((t) => el('th', { textContent: t })))])]);
+  const sBody = el('tbody'); sTable.append(sBody);
+  sList.slice(0, 500).forEach((p) => { const c = scansBy[p.id] || { n: 0, ok: 0 };
+    sBody.append(el('tr', {}, [fmt(p.created_at), p.first_name || 'Not given', p.contact || 'Not given', p.contact_ok ? 'Yes' : 'No', c.n, c.ok].map((t) => el('td', { textContent: String(t) })))); });
+  if (!sList.length) sBody.append(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'No one has registered yet.' })]));
+  view.append(el('div', { className: 'card stack' }, [el('div', { className: 'head' }, [el('h2', { textContent: 'Registered shoppers' }), el('div', { className: 'tools' }, [sExp])]),
+    el('p', { className: 'small muted', textContent: 'Everyone who registered, for all dates. Contact someone only when May contact says Yes. This is personal information: keep exports private.' + (sList.length > 500 ? ' Showing the newest 500 of ' + sList.length + '; the export has all of them.' : '') }),
+    el('div', { className: 'scroll' }, [sTable])]));
+
   // survey answers
   const byQ = {};
   answers.forEach((a) => { (byQ[a.question_text_asked] = byQ[a.question_text_asked] || []).push(a.answer); });
@@ -287,6 +302,15 @@ function exportCsv(rows) {
   }));
   const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' }));
   const a = el('a', { href: url, download: 'syc-scan-log-' + new Date().toISOString().slice(0, 10) + '.csv' });
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportShoppers(list, scansBy) {
+  const cell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+  const lines = ['registered,first_name,contact,may_contact,scan_attempts,successful_scans'].concat(list.map((p) => { const c = scansBy[p.id] || { n: 0, ok: 0 };
+    return [fmt(p.created_at), p.first_name, p.contact, p.contact_ok ? 'yes' : 'no', c.n, c.ok].map(cell).join(','); }));
+  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }));
+  const a = el('a', { href: url, download: 'syc-registered-shoppers-' + new Date().toISOString().slice(0, 10) + '.csv' });
   document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
