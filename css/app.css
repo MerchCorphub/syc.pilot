@@ -35,7 +35,7 @@ p { margin: 0; }
 
 .label { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .field { display: flex; flex-direction: column; gap: 8px; }
-input[type=text], input[type=search], input[type=email], input[type=password], select, textarea {
+input[type=text], input[type=search], input[type=email], input[type=password], input[type=tel], input[type=number], input[type=date], select, textarea {
   min-height: 48px; border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; font: inherit; color: var(--ink); background: var(--surface); width: 100%;
 }
 input[type=checkbox], input[type=radio] { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--navy); }
