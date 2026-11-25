@@ -160,6 +160,28 @@
           <select id="match-stage"></select>
         </div>
       </fieldset>
+      <div class="card stack" id="quality">
+        <div><h2 style="margin:0">See a problem with these bananas?</h2>
+          <p class="small muted" style="margin:4px 0 0">Tell us what you see. It helps the store and the grower handle bananas better. This is your opinion; it does not say who caused it.</p></div>
+        <button class="btn small" id="q-open">Tell us what you see</button>
+        <div class="stack" id="q-form" hidden>
+          <fieldset><legend class="label">Pick all that apply</legend>
+            <div class="opts">
+              <label class="opt"><input type="checkbox" name="qi" value="bruising"><span>Bruising or soft spots</span></label>
+              <label class="opt"><input type="checkbox" name="qi" value="too_many_spots"><span>Too many brown spots</span></label>
+              <label class="opt"><input type="checkbox" name="qi" value="split_peel"><span>Split or broken peel</span></label>
+              <label class="opt"><input type="checkbox" name="qi" value="color_off"><span>Color looks uneven or off</span></label>
+              <label class="opt"><input type="checkbox" name="qi" value="stem_damage"><span>Damaged stems</span></label>
+              <label class="opt"><input type="checkbox" name="qi" value="other"><span>Something else</span></label>
+            </div>
+          </fieldset>
+          <div class="field"><label class="label" for="q-note">Anything to add? (optional)</label>
+            <textarea id="q-note" rows="2" maxlength="300" placeholder="Please do not include names or phone numbers."></textarea></div>
+          <div class="acts"><button class="btn primary small" id="q-send">Send</button><button class="btn small" id="q-cancel">Cancel</button></div>
+          <p class="small muted" style="margin:0">Your report is saved with this scan's photos, store and brand.</p>
+        </div>
+        <div class="note ok" id="q-done" hidden>Thank you. Your report was sent.</div>
+      </div>
       <div class="card"><div class="row"><span class="muted">Store</span><span id="res-store"></span></div></div>
     </div>
     <div class="foot">

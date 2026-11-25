@@ -77,22 +77,26 @@ async function loadData() {
   ).order('created_at', { ascending: false }).limit(5000);
   let a = db.from('survey_answers').select('id,question_id,question_text_asked,answer,scan_id,created_at').order('created_at', { ascending: false }).limit(10000);
   if (from) { q = q.gte('created_at', from.toISOString()); a = a.gte('created_at', from.toISOString()); }
+  let qr = db.from('quality_reports').select('id,scan_id,store_id,store_name_typed,brand_id,stage,issues,note,phone_time,phone_timezone,created_at').order('created_at', { ascending: false }).limit(5000);
+  if (from) qr = qr.gte('created_at', from.toISOString());
   let ev = db.from('engagement_events').select('event,brand_id,sponsored,created_at').order('created_at', { ascending: false }).limit(20000);
   if (from) ev = ev.gte('created_at', from.toISOString());
-  const [att, ans, shop, shopScans, stores, weak, events] = await Promise.all([
+  const [att, ans, shop, shopScans, stores, weak, events, quality, brandList] = await Promise.all([
     q, a,
     db.from('shoppers').select('id,first_name,contact,contact_ok,created_at').order('created_at', { ascending: false }).limit(5000),
     db.from('scan_attempts').select('shopper_id,result').not('shopper_id', 'is', null).limit(20000),
     db.from('stores').select('id,name').order('name'),
     db.from('weak_camera_phones').select('phone_model'),
-    ev,
+    ev, qr,
+    db.from('brands').select('id,name'),
   ]);
   if (att.error) throw att.error;
   const rows = (att.data || []).map((r) => Object.assign(r, {
     scan: Array.isArray(r.scans) ? r.scans[0] || null : r.scans || null,
     storeLabel: (r.stores && r.stores.name) || r.store_name_typed || 'Not given',
   }));
-  cache = { rows, events: events.data || [], answers: ans.data || [], shoppers: (shop.data || []).length, shopperList: shop.data || [], shopperScans: shopScans.data || [], stores: stores.data || [], weak: (weak.data || []).map((x) => x.phone_model) };
+  cache = { rows, events: events.data || [], answers: ans.data || [], shoppers: (shop.data || []).length, shopperList: shop.data || [], shopperScans: shopScans.data || [], stores: stores.data || [], weak: (weak.data || []).map((x) => x.phone_model),
+    quality: quality.error ? null : quality.data || [], brandNames: Object.fromEntries((brandList.data || []).map((b) => [b.id, b.name])) };
 }
 
 async function dataTab() {
@@ -245,6 +249,9 @@ function drawData() {
     el('p', { className: 'small muted', textContent: 'Photos are deleted automatically after 120 to 150 days. Records stay until you delete them here.' + (shown.length > 500 ? ' Showing the newest 500 of ' + shown.length + '; the export has all of them.' : '') }),
     el('div', { className: 'scroll' }, [table])]));
 
+  // quality reports (shopper opinions with a photo; admins only)
+  drawQuality();
+
   // registered shoppers (all dates; admins only)
   const scansBy = {};
   cache.shopperScans.forEach((x) => { const c = (scansBy[x.shopper_id] = scansBy[x.shopper_id] || { n: 0, ok: 0 }); c.n++; if (x.result === 'success') c.ok++; });
@@ -302,6 +309,62 @@ function exportCsv(rows) {
   }));
   const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' }));
   const a = el('a', { href: url, download: 'syc-scan-log-' + new Date().toISOString().slice(0, 10) + '.csv' });
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const QUALITY = { bruising: 'Bruising or soft spots', too_many_spots: 'Too many brown spots', split_peel: 'Split or broken peel', color_off: 'Color looks uneven or off', stem_damage: 'Damaged stems', other: 'Something else' };
+function qualityRows() {
+  const storeName = Object.fromEntries(cache.stores.map((s) => [s.id, s.name]));
+  const photosBy = {};
+  cache.rows.forEach((r) => { if (r.scan) photosBy[r.scan.id] = (r.scan.scan_photos || []).filter((p) => !p.photo_deleted_at); });
+  return (cache.quality || [])
+    .filter((q) => filters.store === 'all' || (filters.store === 'typed' ? !q.store_id && q.store_name_typed : q.store_id === filters.store))
+    .map((q) => Object.assign({}, q, { storeLabel: storeName[q.store_id] || q.store_name_typed || 'Not given', brandLabel: cache.brandNames[q.brand_id] || 'Not picked', photos: photosBy[q.scan_id] || [] }));
+}
+function drawQuality() {
+  const card = el('div', { className: 'card stack', id: 'quality-card' });
+  view.append(card);
+  if (cache.quality === null) { card.append(el('h2', { textContent: 'Quality reports' }), el('div', { className: 'note err', textContent: 'Could not load quality reports.' })); return; }
+  const list = qualityRows();
+  const exp = el('button', { className: 'btn primary small', textContent: 'Export quality reports (CSV)' });
+  exp.addEventListener('click', () => exportQuality(list));
+  card.append(el('div', { className: 'head' }, [el('h2', { textContent: 'Quality reports' }), el('div', { className: 'tools' }, [exp])]),
+    el('p', { className: 'small muted', textContent: 'What shoppers said they saw, for the date range and store picked above. These are shopper opinions with a photo, not inspections, and they do not show who caused a problem. Only admins can see them.' }));
+  if (!list.length) { card.append(el('p', { className: 'muted', textContent: 'No quality reports yet.' })); return; }
+  const count = (keyOf) => { const m = {}; list.forEach((q) => { [].concat(keyOf(q)).forEach((k) => { m[k] = (m[k] || 0) + 1; }); }); return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  const small = (title, pairs) => el('div', { className: 'stack' }, [el('div', { className: 'label', textContent: title }),
+    el('table', {}, [el('tbody', {}, pairs.map(([k, n]) => el('tr', {}, [el('td', { textContent: k }), el('td', { textContent: n + ' · ' + pct(n, list.length) })])))])]);
+  card.append(el('div', { className: 'cols' }, [
+    small('By issue (' + list.length + ' reports; a report can list more than one)', count((q) => q.issues.map((i) => QUALITY[i] || i))),
+    small('By store', count((q) => q.storeLabel)),
+    small('By brand picked', count((q) => q.brandLabel))]));
+  const t = el('table', { style: 'min-width:860px' }, [el('thead', {}, [el('tr', {}, ['When (phone time)', 'Store', 'Brand', 'Stage', 'What they saw', 'Note', 'Photos', ''].map((h) => el('th', { textContent: h })))])]);
+  const body = el('tbody'); t.append(body);
+  list.slice(0, 300).forEach((q) => {
+    const photoCell = el('td');
+    if (q.photos.length) q.photos.forEach((p, i) => { const b = el('button', { className: 'btn link', style: 'min-height:24px;padding:0 6px 0 0', textContent: 'View ' + (i + 1) }); b.addEventListener('click', () => openPhoto(p.storage_path)); photoCell.append(b); });
+    else photoCell.textContent = 'None';
+    const del = el('button', { className: 'btn small danger', textContent: 'Delete' });
+    del.addEventListener('click', async () => {
+      if (!window.confirm('Delete this quality report? The scan itself is kept.')) return;
+      const { error } = await db.from('quality_reports').delete().eq('id', q.id);
+      if (error) return toast('Could not delete: ' + error.message);
+      cache.quality = cache.quality.filter((x) => x.id !== q.id); drawData();
+    });
+    body.append(el('tr', {}, [el('td', { textContent: fmt(q.phone_time || q.created_at, q.phone_timezone) }), el('td', { textContent: q.storeLabel }), el('td', { textContent: q.brandLabel }),
+      el('td', { textContent: q.stage ? 'Stage ' + q.stage : '' }), el('td', { textContent: q.issues.map((i) => QUALITY[i] || i).join(', ') }), el('td', { textContent: q.note || '' }), photoCell, el('td', {}, [del])]));
+  });
+  card.append(el('div', { className: 'scroll' }, [t]));
+  if (list.length > 300) card.append(el('p', { className: 'small muted', textContent: 'Showing the newest 300 of ' + list.length + '. The export has all of them.' }));
+}
+function exportQuality(list) {
+  const cell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+  const head = ['phone_date_time', 'phone_timezone', 'server_time_utc', 'scan_id', 'store', 'brand', 'stage'].concat(Object.keys(QUALITY)).concat(['note', 'photo_paths']);
+  const lines = [head.join(',')].concat(list.map((q) => [fmt(q.phone_time || q.created_at, q.phone_timezone), q.phone_timezone, q.created_at, q.scan_id, q.storeLabel, q.brandLabel, q.stage]
+    .concat(Object.keys(QUALITY).map((k) => (q.issues.includes(k) ? 'yes' : '')))
+    .concat([q.note, q.photos.map((p) => p.storage_path).join(' ')]).map(cell).join(',')));
+  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }));
+  const a = el('a', { href: url, download: 'syc-quality-reports-' + new Date().toISOString().slice(0, 10) + '.csv' });
   document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
