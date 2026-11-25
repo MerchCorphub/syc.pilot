@@ -712,8 +712,35 @@ function showResult() {
   STAGES.filter((x) => x.num !== s.num).forEach((x) => sel.append(el('option', { value: x.num, textContent: 'Stage ' + x.num + ': ' + x.name, selected: !!current.second && current.second.num === x.num })));
   document.querySelectorAll('input[name=match]').forEach((i) => { i.checked = false; });
   $('match-stage-wrap').hidden = true;
+  resetQuality();
   go('result');
 }
+// ---- quality report: the shopper's opinion of what they see, one per scan ----
+const QUALITY_LABELS = { bruising: 'Bruising or soft spots', too_many_spots: 'Too many brown spots', split_peel: 'Split or broken peel', color_off: 'Color looks uneven or off', stem_damage: 'Damaged stems', other: 'Something else' };
+function resetQuality() {
+  const sent = current && current.qualitySent;
+  $('q-open').hidden = !!sent; $('q-form').hidden = true; $('q-done').hidden = !sent;
+  document.querySelectorAll('input[name=qi]').forEach((i) => { i.checked = false; });
+  $('q-note').value = '';
+}
+$('q-open').addEventListener('click', () => { $('q-open').hidden = true; $('q-form').hidden = false; });
+$('q-cancel').addEventListener('click', () => { $('q-form').hidden = true; $('q-open').hidden = false; });
+$('q-send').addEventListener('click', async () => {
+  if (!current) return;
+  const issues = [...document.querySelectorAll('input[name=qi]:checked')].map((i) => i.value);
+  if (!issues.length) return toast('Pick at least one thing you see.');
+  const note = $('q-note').value.trim().slice(0, 300) || null;
+  $('q-send').disabled = true;
+  const { error } = await db.from('quality_reports').insert({
+    scan_id: current.scanId, device_id: state.deviceId, session_id: sessionId,
+    store_id: state.store ? state.store.id || null : null, store_name_typed: state.store ? state.store.typed || null : null,
+    brand_id: brand ? brand.id : null, stage: current.stage.num, issues, note, ...phoneClock(),
+  });
+  $('q-send').disabled = false;
+  if (error && !/duplicate|unique/i.test(error.message || '')) return toast('Could not send. Check your connection and try again.');
+  current.qualitySent = true;
+  $('q-form').hidden = true; $('q-done').hidden = false;
+});
 document.querySelectorAll('input[name=match]').forEach((i) => i.addEventListener('change', () => {
   $('match-stage-wrap').hidden = (document.querySelector('input[name=match]:checked') || {}).value !== 'no';
 }));
