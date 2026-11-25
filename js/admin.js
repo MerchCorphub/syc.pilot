@@ -38,6 +38,7 @@ async function boot() {
   }
   $('signin').hidden = true; $('tabs').hidden = false; view.hidden = false;
   openTab('data');
+  refreshSignupCount();
 }
 function showSignin(msg) { $('signin').hidden = false; $('tabs').hidden = true; view.hidden = true; authMsg(msg); }
 $('do-signin').addEventListener('click', async () => {
@@ -59,7 +60,7 @@ document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click
 function openTab(tab) {
   document.querySelectorAll('[data-tab]').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   view.textContent = '';
-  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab })[tab]();
+  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab, signups: signupsTab })[tab]();
 }
 
 // ---------- pilot data ----------
@@ -640,6 +641,65 @@ async function storesTab() {
   });
   if (!(data || []).length) body.append(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'No stores yet. Until you add one, shoppers type their store name.' })]));
   view.append(el('div', { className: 'card' }, [el('div', { className: 'scroll' }, [table])]));
+}
+
+// ---------- store sign-ups (from mybanana.app/join) ----------
+const SIGNUP_STATUS = [['new', 'New'], ['contacted', 'Contacted'], ['signed', 'Signed'], ['declined', 'Declined']];
+async function refreshSignupCount() {
+  const { count } = await db.from('store_signups').select('id', { count: 'exact', head: true }).eq('status', 'new');
+  const c = $('signup-count'); if (!c) return;
+  c.textContent = count ? String(count) + ' new' : ''; c.hidden = !count;
+}
+async function signupsTab() {
+  view.append(el('p', { className: 'muted', textContent: 'Loading sign-ups…' }));
+  const { data, error } = await db.from('store_signups').select('*').order('created_at', { ascending: false }).limit(2000);
+  view.textContent = '';
+  if (error) { view.append(el('div', { className: 'note err', textContent: 'Could not load the sign-ups.' })); return; }
+  const list = data || [];
+  const exp = el('button', { className: 'btn primary small', textContent: 'Export sign-ups (CSV)' });
+  exp.addEventListener('click', () => exportSignups(list));
+  view.append(el('div', { className: 'head' }, [el('div', { className: 'stack', style: 'flex:1 1 420px' }, [el('h1', { textContent: 'Store sign-ups' }),
+    el('p', { className: 'muted', textContent: 'Requests sent from mybanana.app/join. The plan is set from the daily transactions the store gave. Change the status as you follow up.' })]),
+    el('div', { className: 'tools' }, [exp])]));
+  const t = el('table', { style: 'min-width:1000px' }, [el('thead', {}, [el('tr', {}, ['Received', 'Store', 'Contact', 'Phone / email', 'City', 'Daily transactions', 'Plan', 'Preferred start', 'Notes', 'Status', 'Your notes', ''].map((h) => el('th', { textContent: h })))])]);
+  const body = el('tbody'); t.append(body);
+  list.forEach((r) => {
+    const st = el('select', { ariaLabel: 'Status for ' + r.store_name }, SIGNUP_STATUS.map(([v, l]) => el('option', { value: v, textContent: l, selected: r.status === v })));
+    st.addEventListener('change', async () => {
+      const { error: e } = await db.from('store_signups').update({ status: st.value, updated_at: new Date().toISOString() }).eq('id', r.id);
+      if (e) { st.value = r.status; return toast('Could not change the status.'); }
+      r.status = st.value; refreshSignupCount();
+    });
+    const note = el('textarea', { rows: 2, maxLength: 2000, value: r.admin_notes || '', ariaLabel: 'Your notes for ' + r.store_name });
+    note.addEventListener('change', async () => {
+      const { error: e } = await db.from('store_signups').update({ admin_notes: note.value.trim() || null, updated_at: new Date().toISOString() }).eq('id', r.id);
+      if (e) return toast('Could not save your notes.');
+      r.admin_notes = note.value.trim() || null;
+    });
+    const del = el('button', { className: 'btn danger small', textContent: 'Delete' });
+    del.addEventListener('click', async () => {
+      if (!window.confirm('Delete the request from ' + r.store_name + '?')) return;
+      const { error: e } = await db.from('store_signups').delete().eq('id', r.id);
+      if (e) return toast('Could not delete.');
+      view.textContent = ''; signupsTab(); refreshSignupCount();
+    });
+    const contact = el('td', {}, [el('div', { textContent: r.contact_name }), el('div', { className: 'small muted', textContent: r.contact_role || '' })]);
+    const reach = el('td', {}, [r.phone ? el('div', {}, [el('a', { href: 'tel:' + r.phone.replace(/[^0-9+]/g, ''), textContent: r.phone })]) : '', r.email ? el('div', {}, [el('a', { href: 'mailto:' + r.email, textContent: r.email })]) : '']);
+    body.append(el('tr', {}, [el('td', { textContent: fmt(r.created_at) }), el('td', {}, [el('strong', { textContent: r.store_name }), el('div', { className: 'small muted', textContent: r.chain_name || '' })]),
+      contact, reach, el('td', { textContent: [r.street, r.city, r.state, r.zip].filter(Boolean).join(', ') }), el('td', { textContent: Number(r.daily_transactions).toLocaleString('en-US') }),
+      el('td', { textContent: r.plan }), el('td', { textContent: r.preferred_start || '' }), el('td', { className: 'small', textContent: r.notes || '' }), el('td', {}, [st]), el('td', {}, [note]), el('td', {}, [del])]));
+  });
+  if (!list.length) body.append(el('tr', {}, [el('td', { colSpan: 12, className: 'muted', textContent: 'No sign-ups yet. Share mybanana.app/join with stores.' })]));
+  view.append(el('div', { className: 'card' }, [el('div', { className: 'scroll' }, [t])]));
+  refreshSignupCount();
+}
+function exportSignups(list) {
+  const cell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+  const cols = ['created_at', 'store_name', 'chain_name', 'contact_name', 'contact_role', 'phone', 'email', 'street', 'city', 'state', 'zip', 'daily_transactions', 'plan', 'preferred_start', 'notes', 'status', 'admin_notes'];
+  const lines = [cols.join(',')].concat(list.map((r) => cols.map((c) => cell(r[c])).join(',')));
+  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }));
+  const a = el('a', { href: url, download: 'my-banana-store-signups-' + new Date().toISOString().slice(0, 10) + '.csv' });
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 boot();

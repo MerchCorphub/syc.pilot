@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Banana · Become a Founding Store</title>
+<meta name="description" content="Sign up your store for the My Banana Founding Store offer: first 5 stores get 60 days free.">
+<meta name="theme-color" content="#1b2a4e">
+<link rel="icon" type="image/png" sizes="32x32" href="../icons/mybanana-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../icons/mybanana-180.png">
+<link rel="stylesheet" href="../css/app.css">
+<style>
+  .join { max-width: 720px; margin: 0 auto; padding: 20px 16px 40px; }
+  .join .top { display: flex; align-items: center; gap: 14px; }
+  .join .top img { width: 64px; height: 64px; border-radius: 14px; }
+  .join .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .join .grid2 { grid-template-columns: 1fr; } }
+  .join table td, .join table th { font-size: 14px; }
+  .join .plan-pick { font-weight: 600; }
+  .hp { position: absolute; left: -5000px; width: 1px; height: 1px; overflow: hidden; }
+</style>
+</head>
+<body>
+<main class="join stack">
+  <div class="top"><img src="../icons/welcome.jpg" alt=""><div><h1 style="margin:0">Become a Founding Store</h1><p class="muted" style="margin:2px 0 0">My Banana · Scan Your Color</p></div></div>
+
+  <div class="note"><strong>First 5 stores get the full service free for 60 days.</strong> After that, your store moves to the plan that matches its size. Cancel before day 60 with no further obligation.</div>
+
+  <div class="card stack">
+    <h2 style="margin:0">Plans</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Plan</th><th>Transactions a day</th><th>Price a month</th><th>Store visits</th><th>Store report</th></tr></thead>
+      <tbody>
+        <tr data-plan="Neighborhood"><td>Neighborhood</td><td>Under 800</td><td>$75</td><td>Monthly</td><td>Monthly</td></tr>
+        <tr data-plan="Standard"><td>Standard</td><td>800 to 1,500</td><td>$125</td><td>Every other week</td><td>Monthly</td></tr>
+        <tr data-plan="High-volume"><td>High-volume</td><td>Over 1,500</td><td>$200</td><td>Weekly</td><td>Weekly</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small muted" style="margin:0">No charge per scan. Billed monthly after the free 60 days, net 15. After that, either side can cancel with 60 days' written notice.</p>
+  </div>
+
+  <form class="card stack" id="join-form" novalidate>
+    <h2 style="margin:0">Tell us about your store</h2>
+    <div class="grid2">
+      <div class="field"><label class="label" for="store_name">Store name *</label><input type="text" id="store_name" maxlength="120" required autocomplete="organization"></div>
+      <div class="field"><label class="label" for="chain_name">Chain or company (if any)</label><input type="text" id="chain_name" maxlength="120"></div>
+      <div class="field"><label class="label" for="contact_name">Your name *</label><input type="text" id="contact_name" maxlength="120" required autocomplete="name"></div>
+      <div class="field"><label class="label" for="contact_role">Your role</label><input type="text" id="contact_role" maxlength="80" placeholder="Store manager, produce manager…" autocomplete="organization-title"></div>
+      <div class="field"><label class="label" for="phone">Phone</label><input id="phone" type="tel" maxlength="30" autocomplete="tel"></div>
+      <div class="field"><label class="label" for="email">Email</label><input id="email" type="email" maxlength="160" autocomplete="email"></div>
+      <div class="field" style="grid-column:1/-1"><label class="label" for="street">Street address</label><input type="text" id="street" maxlength="160" autocomplete="street-address"></div>
+      <div class="field"><label class="label" for="city">City *</label><input type="text" id="city" maxlength="80" required autocomplete="address-level2"></div>
+      <div class="grid2" style="gap:12px">
+        <div class="field"><label class="label" for="state">State</label><input type="text" id="state" maxlength="20" autocomplete="address-level1"></div>
+        <div class="field"><label class="label" for="zip">ZIP</label><input type="text" id="zip" maxlength="10" inputmode="numeric" autocomplete="postal-code"></div>
+      </div>
+    </div>
+    <div class="field"><label class="label" for="daily">On a typical day, about how many customer transactions does your store ring up? *</label>
+      <input id="daily" type="number" inputmode="numeric" min="1" max="100000" required></div>
+    <p class="plan-pick" id="plan-out" aria-live="polite"></p>
+    <div class="grid2">
+      <div class="field"><label class="label" for="start">Preferred start date</label><input id="start" type="date"></div>
+    </div>
+    <div class="field"><label class="label" for="notes">Anything we should know?</label><textarea id="notes" rows="3" maxlength="1000"></textarea></div>
+    <div class="hp" aria-hidden="true"><label for="website">Website</label><input id="website" tabindex="-1" autocomplete="off"></div>
+    <label class="opt"><input type="checkbox" id="agree"><span>I agree that My Banana may contact me about this request.</span></label>
+    <p class="small muted" style="margin:0">* Required. Give a phone number or an email so we can reach you. This form registers interest only; a short service agreement follows before service begins.</p>
+    <button class="btn primary" id="send" type="submit">Send my request</button>
+  </form>
+
+  <div class="card stack" id="done" hidden>
+    <h2 style="margin:0">Thank you!</h2>
+    <p id="done-text">We received your request and will contact you to confirm your plan and a start date.</p>
+    <a class="btn" href="../">Open My Banana</a>
+  </div>
+
+  <p class="small muted">My Banana is a service of Merch Corporation. We use the details on this form only to respond to your request. Patent pending, U.S. App. No. 19/836,387.</p>
+</main>
+<div class="toast note err" id="toast" role="alert" hidden></div>
+<script type="module" src="../js/join.js"></script>
+</body>
+</html>
