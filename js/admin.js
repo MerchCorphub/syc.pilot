@@ -72,7 +72,7 @@ async function loadData() {
   if (filters.range === '7') from = new Date(Date.now() - 7 * 86400000);
   if (filters.range === 'today') { from = new Date(); from.setHours(0, 0, 0, 0); }
   let q = db.from('scan_attempts').select(
-    'id,created_at,phone_time,phone_timezone,result,failure_reason,try_anyway,device_id,shopper_id,store_id,store_name_typed,session_id,eating_time,' +
+    'id,created_at,phone_time,phone_timezone,result,failure_reason,try_anyway,device_id,shopper_id,store_id,store_name_typed,session_id,eating_time,brand_id,' +
     'devices(phone_model,os,browser),stores(name),brands(name),' +
     'scans(id,stage,saved,shopper_match,shopper_stage,reader_version,color_values,eating_time,match_category,scan_photos(id,storage_path,photo_deleted_at))'
   ).order('created_at', { ascending: false }).limit(5000);
@@ -86,7 +86,7 @@ async function loadData() {
     q, a,
     db.from('shoppers').select('id,first_name,contact,contact_ok,created_at').order('created_at', { ascending: false }).limit(5000),
     db.from('scan_attempts').select('shopper_id,result').not('shopper_id', 'is', null).limit(20000),
-    db.from('stores').select('id,name').order('name'),
+    db.from('stores').select('id,name,retailer,brands_may_see').order('name'),
     db.from('weak_camera_phones').select('phone_model'),
     ev, qr,
     db.from('brands').select('id,name'),
@@ -335,6 +335,7 @@ function drawQualityPage() {
   view.append(el('div', { className: 'head' }, [el('div', { className: 'stack', style: 'flex:1 1 420px' }, [el('h1', { textContent: 'Quality reports' }),
     el('p', { className: 'muted', textContent: 'What shoppers said they saw on the bananas they scanned, from the "See a problem with these bananas?" card on the result screen.' })]),
     el('div', { className: 'tools' }, [range, store])]));
+  drawReportBuilder();
   drawQuality();
 }
 function drawQuality() {
@@ -393,6 +394,150 @@ function exportQuality(list) {
   const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }));
   const a = el('a', { href: url, download: 'syc-quality-reports-' + new Date().toISOString().slice(0, 10) + '.csv' });
   document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---------- quality report builder: retailer version and producer version, as PDF (print) or Excel ----------
+const report = { type: 'retailer', target: '' };
+const lc = (t) => String(t || '').trim().toLowerCase();
+function storeInfo(storeId) { return cache.stores.find((s) => s.id === storeId) || null; }
+function inRetailer(storeId, typed, target) {
+  const t = lc(target); if (!t) return false;
+  const s = storeInfo(storeId);
+  if (s) return lc(s.retailer) === t || lc(s.name).includes(t);
+  return lc(typed).includes(t);
+}
+function retailerChoices() {
+  const set = new Set(cache.stores.map((s) => s.retailer).filter(Boolean));
+  cache.rows.forEach((r) => { if (!r.store_id && r.store_name_typed) { const w = r.store_name_typed.trim().split(/\s+/)[0]; if (w && /[a-z]/i.test(w) && w.length > 2) set.add(w); } });
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+function weekStart(iso) { const d = new Date(iso); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
+function buildReport() {
+  const type = report.type, target = report.target;
+  const isRet = type === 'retailer';
+  const brandId = isRet ? null : target;
+  const brandName = isRet ? null : cache.brandNames[target];
+  const okAttempts = cache.rows.filter((r) => r.result === 'success' && r.scan && (isRet ? inRetailer(r.store_id, r.store_name_typed, target) : r.brand_id === brandId));
+  const qs = (cache.quality || []).filter((q) => (isRet ? inRetailer(q.store_id, q.store_name_typed, target) : q.brand_id === brandId));
+  const storeLabel = (storeId, typed) => {
+    const s = storeInfo(storeId);
+    if (isRet) return (s && s.name) || typed || 'Not given';
+    return s && s.brands_may_see ? s.name : 'Stores not named (no permission)';
+  };
+  const count = (list, keyOf) => { const m = {}; list.forEach((x) => [].concat(keyOf(x)).forEach((k) => { m[k] = (m[k] || 0) + 1; })); return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  const scansBy = {}; okAttempts.forEach((r) => { const k = storeLabel(r.store_id, r.store_name_typed); scansBy[k] = (scansBy[k] || 0) + 1; });
+  const byStore = count(qs, (q) => storeLabel(q.store_id, q.store_name_typed)).map(([k, n]) => [k, n, scansBy[k] || 0]);
+  Object.keys(scansBy).forEach((k) => { if (!byStore.some((x) => x[0] === k)) byStore.push([k, 0, scansBy[k]]); });
+  const weeks = {}; qs.forEach((q) => { const w = weekStart(q.phone_time || q.created_at); weeks[w] = (weeks[w] || 0) + 1; });
+  const rangeLabel = { all: 'Whole pilot', 7: 'Last 7 days', today: 'Today' }[filters.range] || 'Whole pilot';
+  return {
+    type, isRet, title: isRet ? target + ' store quality report' : (brandName || 'Brand') + ' brand quality report',
+    scope: isRet ? 'All ' + target + ' stores in the pilot' : 'Scans where the shopper picked ' + (brandName || 'this brand') + ', across all pilot stores',
+    rangeLabel, scans: okAttempts.length, reports: qs.length, samples: qs.filter((q) => q.is_sample).length,
+    byIssue: count(qs, (q) => q.issues.map((i) => QUALITY[i] || i)),
+    byStage: STAGES.map((s) => ['Stage ' + s.num + ': ' + s.name, qs.filter((q) => q.stage === s.num).length]),
+    byWeek: Object.keys(weeks).sort().map((w) => [w, weeks[w]]),
+    byStore: byStore.sort((a, b) => b[1] - a[1]),
+    byBrand: isRet ? count(qs, (q) => cache.brandNames[q.brand_id] || 'Not picked') : null,
+    rows: qs.map((q) => ({ when: fmt(q.phone_time || q.created_at, q.phone_timezone), store: storeLabel(q.store_id, q.store_name_typed), brand: cache.brandNames[q.brand_id] || 'Not picked',
+      stage: q.stage ? 'Stage ' + q.stage : '', issues: q.issues.map((i) => QUALITY[i] || i).join(', '), note: isRet ? q.note || '' : '', sample: q.is_sample ? 'Sample' : '' })),
+  };
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, text) { const n = document.createElementNS(SVGNS, tag); Object.entries(attrs || {}).forEach(([k, v]) => n.setAttribute(k, v)); if (text !== undefined) n.textContent = text; return n; }
+function barChart(title, pairs, unit) {
+  const W = 680, rowH = 30, left = 230, top = 34, max = Math.max(1, ...pairs.map((p) => p[1]));
+  const svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + (top + pairs.length * rowH + 14), role: 'img', 'aria-label': title, width: '100%' });
+  svg.append(svgEl('text', { x: 0, y: 18, 'font-size': 15, 'font-weight': 700, fill: '#1b2a4e' }, title));
+  if (!pairs.length) svg.append(svgEl('text', { x: 0, y: top + 16, 'font-size': 13, fill: '#566172' }, 'No reports in this period.'));
+  pairs.forEach(([label, n], i) => {
+    const y = top + i * rowH, w = Math.round((W - left - 60) * n / max);
+    svg.append(svgEl('text', { x: left - 10, y: y + 17, 'font-size': 13, 'text-anchor': 'end', fill: '#232c3a' }, label.length > 34 ? label.slice(0, 33) + '…' : label));
+    svg.append(svgEl('rect', { x: left, y: y + 4, width: Math.max(w, n ? 3 : 0), height: 18, rx: 3, fill: i === 0 && n ? '#c99a12' : '#8d99b3' }));
+    svg.append(svgEl('text', { x: left + w + 8, y: y + 17, 'font-size': 13, 'font-weight': 700, fill: '#1b2a4e' }, String(n) + (unit || '')));
+  });
+  return svg;
+}
+function reportView(R) {
+  const wrap = el('div', { className: 'stack report-doc' });
+  wrap.append(el('div', {}, [el('h2', { textContent: R.title, style: 'margin:0' }),
+    el('p', { className: 'small muted', textContent: R.scope + ' · ' + R.rangeLabel + ' · Prepared ' + new Date().toLocaleDateString([], { dateStyle: 'medium' }) + ' by My Banana' })]));
+  if (R.samples) wrap.append(el('div', { className: 'note', textContent: R.samples + ' of the ' + R.reports + ' reports below are sample data for demonstration, not real shopper reports.' }));
+  wrap.append(el('div', { className: 'tiles' }, [['Successful scans', R.scans], ['Quality reports', R.reports], ['Reports per 100 scans', R.scans ? (R.reports / R.scans * 100).toFixed(1) : 'Not available']].map(([l, v]) => el('div', { className: 'tile' }, [el('div', { className: 'label', textContent: l }), el('div', { className: 'fig', textContent: String(v) })]))));
+  const charts = el('div', { className: 'report-charts' });
+  charts.append(barChart('What shoppers reported', R.byIssue), barChart('Ripeness stage of reported bunches', R.byStage),
+    barChart(R.isRet ? 'Reports by store' : 'Reports by store (named only with the store\'s permission)', R.byStore.map(([k, n]) => [k, n])),
+    R.isRet ? barChart('Reports by brand the shopper picked', R.byBrand) : barChart('Reports by week (week starting)', R.byWeek.map(([w, n]) => [new Date(w + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' }), n])));
+  if (R.isRet) charts.append(barChart('Reports by week (week starting)', R.byWeek.map(([w, n]) => [new Date(w + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' }), n])));
+  wrap.append(charts);
+  const heads = ['When', 'Store', R.isRet ? 'Brand' : null, 'Stage', 'What they saw', R.isRet ? 'Note' : null, ''].filter((h) => h !== null);
+  const t = el('table', {}, [el('thead', {}, [el('tr', {}, heads.map((h) => el('th', { textContent: h })))])]);
+  const b = el('tbody'); t.append(b);
+  R.rows.forEach((r) => b.append(el('tr', {}, [r.when, r.store, R.isRet ? r.brand : null, r.stage, r.issues, R.isRet ? r.note : null, r.sample].filter((c) => c !== null).map((c) => el('td', { textContent: c })))));
+  if (!R.rows.length) b.append(el('tr', {}, [el('td', { colSpan: heads.length, className: 'muted', textContent: 'No quality reports for this selection.' })]));
+  wrap.append(el('div', { className: 'scroll' }, [t]));
+  wrap.append(el('p', { className: 'small muted', textContent: 'Shopper reports are opinions with photos, not inspections, and do not show who caused a problem. ' + (R.isRet ? 'This report covers ' + R.scope.replace('All ', '') + ' only.' : 'Store names appear only for stores that have given permission; all other stores are combined. Shopper notes are left out.') + ' Patent pending, U.S. App. No. 19/836,387.' }));
+  return wrap;
+}
+function drawReportBuilder() {
+  const card = el('div', { className: 'card stack no-print', id: 'report-builder' });
+  const type = el('select', { id: 'rb-type' }, [['retailer', 'Retailer report (stores)'], ['producer', 'Producer report (brand)']].map(([v, t]) => el('option', { value: v, textContent: t, selected: report.type === v })));
+  const retailers = retailerChoices();
+  const listId = 'rb-retailers';
+  const retInput = el('input', { type: 'text', id: 'rb-retailer', placeholder: 'e.g. Kroger', value: report.type === 'retailer' ? report.target : '', maxLength: 80 });
+  retInput.setAttribute('list', listId);
+  const dl = el('datalist', { id: listId }, retailers.map((r) => el('option', { value: r })));
+  const brandSel = el('select', { id: 'rb-brand' }, Object.entries(cache.brandNames).map(([id, n]) => el('option', { value: id, textContent: n, selected: report.target === id })));
+  const pickRet = el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'rb-retailer', textContent: 'Retailer' }), retInput, dl]);
+  const pickBrand = el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'rb-brand', textContent: 'Brand' }), brandSel]);
+  const preview = el('div', { id: 'report-preview' });
+  const sync = () => { pickRet.hidden = type.value !== 'retailer'; pickBrand.hidden = type.value !== 'producer'; };
+  type.addEventListener('change', () => { report.type = type.value; preview.textContent = ''; sync(); });
+  sync();
+  const current = () => {
+    report.type = type.value; report.target = type.value === 'retailer' ? retInput.value.trim() : brandSel.value;
+    if (!report.target) { toast(type.value === 'retailer' ? 'Type or pick a retailer.' : 'Pick a brand.'); return null; }
+    return buildReport();
+  };
+  const show = el('button', { className: 'btn', textContent: 'Preview' });
+  show.addEventListener('click', () => { const R = current(); if (!R) return; preview.textContent = ''; preview.append(reportView(R)); });
+  const pdf = el('button', { className: 'btn primary', textContent: 'Download PDF' });
+  pdf.addEventListener('click', () => { const R = current(); if (!R) return; printReport(R); });
+  const xls = el('button', { className: 'btn primary', textContent: 'Download Excel' });
+  xls.addEventListener('click', async () => { const R = current(); if (!R) return; xls.disabled = true; try { await excelReport(R); } catch (e) { toast('Could not build the Excel file: ' + (e.message || e)); } xls.disabled = false; });
+  card.append(el('h2', { textContent: 'Build a report' }),
+    el('p', { className: 'small muted', textContent: 'Retailer reports cover one retailer\'s stores. Producer reports cover one brand across all stores and name a store only if it has given permission (set on the Stores tab). Uses the date range picked above. PDF opens your print window: choose "Save as PDF".' }),
+    el('div', { className: 'grid-form' }, [el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: 'rb-type', textContent: 'Report' }), type]), pickRet, pickBrand]),
+    el('div', { className: 'acts' }, [show, pdf, xls]), preview);
+  view.append(card);
+}
+function printReport(R) {
+  let area = $('report-print');
+  if (!area) { area = el('div', { id: 'report-print' }); document.body.append(area); }
+  area.textContent = '';
+  area.append(el('div', { className: 'print-brand', textContent: 'My Banana · Scan Your Color' }), reportView(R));
+  document.body.classList.add('print-report');
+  const done = () => { document.body.classList.remove('print-report'); window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  const old = document.title; document.title = R.title.replace(/[^\w -]/g, '') + ' ' + new Date().toISOString().slice(0, 10);
+  window.print(); document.title = old; setTimeout(done, 1500);
+}
+async function excelReport(R) {
+  const XLSX = await import('./vendor/xlsx.mjs');
+  const wb = XLSX.utils.book_new();
+  const add = (name, rows, widths) => { const ws = XLSX.utils.aoa_to_sheet(rows); ws['!cols'] = widths.map((w) => ({ wch: w })); XLSX.utils.book_append_sheet(wb, ws, name); };
+  add('Summary', [[R.title], [R.scope], ['Period', R.rangeLabel], ['Prepared', new Date().toLocaleDateString()], [],
+    ['Successful scans', R.scans], ['Quality reports', R.reports], ['Reports per 100 scans', R.scans ? Number((R.reports / R.scans * 100).toFixed(1)) : 'Not available'],
+    ['Sample reports included', R.samples], [], ['Shopper reports are opinions with photos, not inspections, and do not show who caused a problem.'],
+    [R.isRet ? 'Covers this retailer\'s stores only.' : 'Stores are named only with their permission; all other stores are combined. Shopper notes are left out.']], [34, 40]);
+  add('By issue', [['What shoppers reported', 'Reports']].concat(R.byIssue), [34, 10]);
+  add('By stage', [['Ripeness stage', 'Reports']].concat(R.byStage), [28, 10]);
+  add('By store', [['Store', 'Quality reports', 'Successful scans', 'Reports per 100 scans']].concat(R.byStore.map(([k, n, s]) => [k, n, s, s ? Number((n / s * 100).toFixed(1)) : ''])), [40, 16, 16, 20]);
+  if (R.isRet) add('By brand', [['Brand the shopper picked', 'Reports']].concat(R.byBrand), [28, 10]);
+  add('By week', [['Week starting', 'Reports']].concat(R.byWeek), [16, 10]);
+  const heads = ['When', 'Store'].concat(R.isRet ? ['Brand'] : []).concat(['Stage', 'What they saw']).concat(R.isRet ? ['Note'] : []).concat(['Sample']);
+  add('Reports', [heads].concat(R.rows.map((r) => [r.when, r.store].concat(R.isRet ? [r.brand] : []).concat([r.stage, r.issues]).concat(R.isRet ? [r.note] : []).concat([r.sample]))), [22, 30, 14, 10, 40, 40, 10]);
+  XLSX.writeFile(wb, R.title.replace(/[^\w -]/g, '').replace(/\s+/g, '-') + '-' + new Date().toISOString().slice(0, 10) + '.xlsx');
 }
 
 function exportShoppers(list, scansBy) {
@@ -640,22 +785,29 @@ async function storesTab() {
   view.textContent = '';
   if (error) { view.append(el('div', { className: 'note err', textContent: 'Could not load the stores.' })); return; }
   view.append(el('div', { className: 'stack' }, [el('h1', { textContent: 'Pilot stores' }),
-    el('p', { className: 'muted', textContent: 'Shoppers pick from this list before they scan. Stores that are turned off are hidden from shoppers.' })]));
-  const f = { name: el('input', { type: 'text', id: 's-name', maxLength: 120 }), city: el('input', { type: 'text', id: 's-city', maxLength: 80 }), state: el('input', { type: 'text', id: 's-state', maxLength: 20 }), zip: el('input', { type: 'text', id: 's-zip', maxLength: 10 }) };
+    el('p', { className: 'muted', textContent: 'Shoppers pick from this list before they scan. Stores that are turned off are hidden from shoppers. Set the retailer so stores group into retailer reports. Tick "Brands may see store name" only when the store has given permission; otherwise producer reports combine it with other unnamed stores.' })]));
+  const f = { name: el('input', { type: 'text', id: 's-name', maxLength: 120 }), retailer: el('input', { type: 'text', id: 's-retailer', maxLength: 80, placeholder: 'e.g. Kroger' }), city: el('input', { type: 'text', id: 's-city', maxLength: 80 }), state: el('input', { type: 'text', id: 's-state', maxLength: 20 }), zip: el('input', { type: 'text', id: 's-zip', maxLength: 10 }) };
   const add = el('button', { className: 'btn primary', textContent: 'Add store' });
   add.addEventListener('click', async () => {
     if (!f.name.value.trim()) return toast('The store needs a name.');
-    const { error: e } = await db.from('stores').insert({ name: f.name.value.trim(), city: f.city.value.trim() || null, state: f.state.value.trim() || null, zip: f.zip.value.trim() || null });
+    const { error: e } = await db.from('stores').insert({ name: f.name.value.trim(), retailer: f.retailer.value.trim() || null, city: f.city.value.trim() || null, state: f.state.value.trim() || null, zip: f.zip.value.trim() || null });
     if (e) return toast('Could not add the store.');
     view.textContent = ''; storesTab();
   });
   const fld = (label, input) => el('div', { className: 'field' }, [el('label', { className: 'label', htmlFor: input.id, textContent: label }), input]);
-  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Add a store' }), el('div', { className: 'grid-form' }, [fld('Store name', f.name), fld('City', f.city), fld('State', f.state), fld('ZIP', f.zip), add])]));
-  const table = el('table', {}, [el('thead', {}, [el('tr', {}, ['Store', 'City', 'State', 'ZIP', 'Shown to shoppers', ''].map((t) => el('th', { textContent: t })))])]);
+  view.append(el('div', { className: 'card stack' }, [el('h2', { textContent: 'Add a store' }), el('div', { className: 'grid-form' }, [fld('Store name', f.name), fld('Retailer or chain', f.retailer), fld('City', f.city), fld('State', f.state), fld('ZIP', f.zip), add])]));
+  const table = el('table', {}, [el('thead', {}, [el('tr', {}, ['Store', 'Retailer or chain', 'City', 'State', 'ZIP', 'Shown to shoppers', 'Brands may see store name', ''].map((t) => el('th', { textContent: t })))])]);
   const body = el('tbody'); table.append(body);
   (data || []).forEach((s) => {
     const on = el('input', { type: 'checkbox', checked: s.active, ariaLabel: 'Show ' + s.name + ' to shoppers' });
     on.addEventListener('change', async () => { const { error: e } = await db.from('stores').update({ active: on.checked }).eq('id', s.id); if (e) { on.checked = !on.checked; toast('Could not change the store.'); } });
+    const ret = el('input', { type: 'text', value: s.retailer || '', maxLength: 80, ariaLabel: 'Retailer for ' + s.name, style: 'min-width:120px' });
+    ret.addEventListener('change', async () => { const { error: e } = await db.from('stores').update({ retailer: ret.value.trim() || null }).eq('id', s.id); if (e) toast('Could not save the retailer.'); });
+    const perm = el('input', { type: 'checkbox', checked: !!s.brands_may_see, ariaLabel: 'Brands may see the name of ' + s.name });
+    perm.addEventListener('change', async () => {
+      if (perm.checked && !window.confirm('Only tick this if ' + s.name + ' has given permission for producers to see its name in brand reports. Continue?')) { perm.checked = false; return; }
+      const { error: e } = await db.from('stores').update({ brands_may_see: perm.checked }).eq('id', s.id); if (e) { perm.checked = !perm.checked; toast('Could not change the permission.'); }
+    });
     const del = el('button', { className: 'btn danger small', textContent: 'Delete' });
     del.addEventListener('click', async () => {
       if (!window.confirm('Delete ' + s.name + '? Scans already taken there stay in the log but lose the store name. To keep the name, turn the store off instead.')) return;
@@ -663,9 +815,9 @@ async function storesTab() {
       if (e) return toast('Could not delete the store.');
       view.textContent = ''; storesTab();
     });
-    body.append(el('tr', {}, [el('td', { textContent: s.name }), el('td', { textContent: s.city || '' }), el('td', { textContent: s.state || '' }), el('td', { textContent: s.zip || '' }), el('td', {}, [on]), el('td', {}, [del])]));
+    body.append(el('tr', {}, [el('td', { textContent: s.name }), el('td', {}, [ret]), el('td', { textContent: s.city || '' }), el('td', { textContent: s.state || '' }), el('td', { textContent: s.zip || '' }), el('td', {}, [on]), el('td', {}, [perm]), el('td', {}, [del])]));
   });
-  if (!(data || []).length) body.append(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'No stores yet. Until you add one, shoppers type their store name.' })]));
+  if (!(data || []).length) body.append(el('tr', {}, [el('td', { colSpan: 8, className: 'muted', textContent: 'No stores yet. Until you add one, shoppers type their store name.' })]));
   view.append(el('div', { className: 'card' }, [el('div', { className: 'scroll' }, [table])]));
 }
 
