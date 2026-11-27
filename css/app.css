@@ -151,3 +151,17 @@ body > .patent { padding: 16px; }
 .code.big { font-size: 32px; line-height: 40px; text-align: center; padding: 16px; border: 2px dashed var(--brass); border-radius: 6px; background: var(--brass-soft); }
 .switch-on { border-color: var(--ok); }
 .stack > .chip { align-self: flex-start; }
+
+/* quality report builder + print */
+.report-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 760px) { .report-charts { grid-template-columns: 1fr; } }
+#report-print { display: none; }
+@media print {
+  body.print-report > *:not(#report-print) { display: none !important; }
+  body.print-report #report-print { display: block; padding: 0; font-size: 12px; }
+  body.print-report .report-charts { grid-template-columns: 1fr; gap: 10px; }
+  body.print-report .report-charts svg { max-width: 6.8in; }
+  body.print-report .report-charts svg { break-inside: avoid; }
+  body.print-report table { font-size: 11px; }
+  .print-brand { font-weight: 700; color: #1b2a4e; border-bottom: 3px solid #e0b324; padding-bottom: 6px; margin-bottom: 10px; }
+}
