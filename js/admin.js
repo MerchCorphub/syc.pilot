@@ -60,7 +60,7 @@ document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click
 function openTab(tab) {
   document.querySelectorAll('[data-tab]').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   view.textContent = '';
-  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab, signups: signupsTab })[tab]();
+  ({ data: dataTab, survey: surveyTab, library: libraryTab, stores: storesTab, signups: signupsTab, quality: qualityTab })[tab]();
 }
 
 // ---------- pilot data ----------
@@ -250,9 +250,6 @@ function drawData() {
     el('p', { className: 'small muted', textContent: 'Photos are deleted automatically after 120 to 150 days. Records stay until you delete them here.' + (shown.length > 500 ? ' Showing the newest 500 of ' + shown.length + '; the export has all of them.' : '') }),
     el('div', { className: 'scroll' }, [table])]));
 
-  // quality reports (shopper opinions with a photo; admins only)
-  drawQuality();
-
   // registered shoppers (all dates; admins only)
   const scansBy = {};
   cache.shopperScans.forEach((x) => { const c = (scansBy[x.shopper_id] = scansBy[x.shopper_id] || { n: 0, ok: 0 }); c.n++; if (x.result === 'success') c.ok++; });
@@ -322,6 +319,24 @@ function qualityRows() {
     .filter((q) => filters.store === 'all' || (filters.store === 'typed' ? !q.store_id && q.store_name_typed : q.store_id === filters.store))
     .map((q) => Object.assign({}, q, { storeLabel: storeName[q.store_id] || q.store_name_typed || 'Not given', brandLabel: cache.brandNames[q.brand_id] || 'Not picked', photos: photosBy[q.scan_id] || [] }));
 }
+async function qualityTab() {
+  view.append(el('p', { className: 'muted', textContent: 'Loading quality reports…' }));
+  try { await loadData(); } catch (e) { view.textContent = ''; view.append(el('div', { className: 'note err', textContent: 'Could not load quality reports: ' + (e.message || e) })); return; }
+  drawQualityPage();
+}
+function drawQualityPage() {
+  view.textContent = '';
+  const range = el('select', { id: 'q-range' }, [['all', 'Whole pilot'], ['7', 'Last 7 days'], ['today', 'Today']].map(([v, t]) => el('option', { value: v, textContent: t, selected: filters.range === v })));
+  range.addEventListener('change', () => { filters.range = range.value; view.textContent = ''; qualityTab(); });
+  const store = el('select', { id: 'q-store' }, [el('option', { value: 'all', textContent: 'All stores' })]
+    .concat(cache.stores.map((s) => el('option', { value: s.id, textContent: s.name, selected: filters.store === s.id })))
+    .concat([el('option', { value: 'typed', textContent: 'Typed by shopper', selected: filters.store === 'typed' })]));
+  store.addEventListener('change', () => { filters.store = store.value; drawQualityPage(); });
+  view.append(el('div', { className: 'head' }, [el('div', { className: 'stack', style: 'flex:1 1 420px' }, [el('h1', { textContent: 'Quality reports' }),
+    el('p', { className: 'muted', textContent: 'What shoppers said they saw on the bananas they scanned, from the "See a problem with these bananas?" card on the result screen.' })]),
+    el('div', { className: 'tools' }, [range, store])]));
+  drawQuality();
+}
 function drawQuality() {
   const card = el('div', { className: 'card stack', id: 'quality-card' });
   view.append(card);
@@ -350,7 +365,7 @@ function drawQuality() {
       if (!window.confirm('Delete this quality report? The scan itself is kept.')) return;
       const { error } = await db.from('quality_reports').delete().eq('id', q.id);
       if (error) return toast('Could not delete: ' + error.message);
-      cache.quality = cache.quality.filter((x) => x.id !== q.id); drawData();
+      cache.quality = cache.quality.filter((x) => x.id !== q.id); drawQualityPage();
     });
     body.append(el('tr', {}, [el('td', { textContent: fmt(q.phone_time || q.created_at, q.phone_timezone) }), el('td', { textContent: q.storeLabel }), el('td', { textContent: q.brandLabel }),
       el('td', { textContent: q.stage ? 'Stage ' + q.stage : '' }), el('td', { textContent: q.issues.map((i) => QUALITY[i] || i).join(', ') }), el('td', { textContent: q.note || '' }), photoCell, el('td', {}, [del])]));
