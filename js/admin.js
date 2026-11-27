@@ -78,7 +78,7 @@ async function loadData() {
   ).order('created_at', { ascending: false }).limit(5000);
   let a = db.from('survey_answers').select('id,question_id,question_text_asked,answer,scan_id,created_at').order('created_at', { ascending: false }).limit(10000);
   if (from) { q = q.gte('created_at', from.toISOString()); a = a.gte('created_at', from.toISOString()); }
-  let qr = db.from('quality_reports').select('id,scan_id,store_id,store_name_typed,brand_id,stage,issues,note,phone_time,phone_timezone,created_at').order('created_at', { ascending: false }).limit(5000);
+  let qr = db.from('quality_reports').select('id,scan_id,store_id,store_name_typed,brand_id,stage,issues,note,phone_time,phone_timezone,created_at,is_sample').order('created_at', { ascending: false }).limit(5000);
   if (from) qr = qr.gte('created_at', from.toISOString());
   let ev = db.from('engagement_events').select('event,brand_id,sponsored,created_at').order('created_at', { ascending: false }).limit(20000);
   if (from) ev = ev.gte('created_at', from.toISOString());
@@ -346,6 +346,17 @@ function drawQuality() {
   exp.addEventListener('click', () => exportQuality(list));
   card.append(el('div', { className: 'head' }, [el('h2', { textContent: 'Quality reports' }), el('div', { className: 'tools' }, [exp])]),
     el('p', { className: 'small muted', textContent: 'What shoppers said they saw, for the date range and store picked above. These are shopper opinions with a photo, not inspections, and they do not show who caused a problem. Only admins can see them.' }));
+  const samples = list.filter((q) => q.is_sample).length;
+  if (samples) {
+    const clear = el('button', { className: 'btn small danger', textContent: 'Delete all sample reports' });
+    clear.addEventListener('click', async () => {
+      if (!window.confirm('Delete all ' + samples + ' sample quality reports? Real shopper reports are kept.')) return;
+      const { error } = await db.from('quality_reports').delete().eq('is_sample', true);
+      if (error) return toast('Could not delete: ' + error.message);
+      cache.quality = cache.quality.filter((x) => !x.is_sample); drawQualityPage();
+    });
+    card.append(el('div', { className: 'note', style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, [el('span', { textContent: samples + ' of these ' + list.length + ' reports are sample data added for demonstration, marked Sample below. They are not real shopper reports.' }), clear]));
+  }
   if (!list.length) { card.append(el('p', { className: 'muted', textContent: 'No quality reports yet.' })); return; }
   const count = (keyOf) => { const m = {}; list.forEach((q) => { [].concat(keyOf(q)).forEach((k) => { m[k] = (m[k] || 0) + 1; }); }); return Object.entries(m).sort((a, b) => b[1] - a[1]); };
   const small = (title, pairs) => el('div', { className: 'stack' }, [el('div', { className: 'label', textContent: title }),
@@ -367,7 +378,7 @@ function drawQuality() {
       if (error) return toast('Could not delete: ' + error.message);
       cache.quality = cache.quality.filter((x) => x.id !== q.id); drawQualityPage();
     });
-    body.append(el('tr', {}, [el('td', { textContent: fmt(q.phone_time || q.created_at, q.phone_timezone) }), el('td', { textContent: q.storeLabel }), el('td', { textContent: q.brandLabel }),
+    body.append(el('tr', {}, [el('td', {}, [el('div', { textContent: fmt(q.phone_time || q.created_at, q.phone_timezone) }), q.is_sample ? el('span', { className: 'chip brass', textContent: 'Sample' }) : '']), el('td', { textContent: q.storeLabel }), el('td', { textContent: q.brandLabel }),
       el('td', { textContent: q.stage ? 'Stage ' + q.stage : '' }), el('td', { textContent: q.issues.map((i) => QUALITY[i] || i).join(', ') }), el('td', { textContent: q.note || '' }), photoCell, el('td', {}, [del])]));
   });
   card.append(el('div', { className: 'scroll' }, [t]));
@@ -375,7 +386,7 @@ function drawQuality() {
 }
 function exportQuality(list) {
   const cell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-  const head = ['phone_date_time', 'phone_timezone', 'server_time_utc', 'scan_id', 'store', 'brand', 'stage'].concat(Object.keys(QUALITY)).concat(['note', 'photo_paths']);
+  const head = ['sample', 'phone_date_time', 'phone_timezone', 'server_time_utc', 'scan_id', 'store', 'brand', 'stage'].concat(Object.keys(QUALITY)).concat(['note', 'photo_paths']);
   const lines = [head.join(',')].concat(list.map((q) => [fmt(q.phone_time || q.created_at, q.phone_timezone), q.phone_timezone, q.created_at, q.scan_id, q.storeLabel, q.brandLabel, q.stage]
     .concat(Object.keys(QUALITY).map((k) => (q.issues.includes(k) ? 'yes' : '')))
     .concat([q.note, q.photos.map((p) => p.storage_path).join(' ')]).map(cell).join(',')));
